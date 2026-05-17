@@ -1,0 +1,5 @@
+bin/
+dist/
+*.out.json
+*.probe.jsonl
+tests/audio/*.tmp.*

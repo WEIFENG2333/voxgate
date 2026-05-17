@@ -1,0 +1,110 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          args: check
+
+  build:
+    needs: goreleaser-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: ime-asr_linux_amd64
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            asset: ime-asr_linux_arm64
+            archive: tar.gz
+          - os: macos-13
+            asset: ime-asr_darwin_amd64
+            archive: tar.gz
+          - os: macos-14
+            asset: ime-asr_darwin_arm64
+            archive: tar.gz
+          - os: windows-latest
+            asset: ime-asr_windows_amd64
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Install deps Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libopusfile-dev ffmpeg pkg-config
+      - name: Install deps macOS
+        if: runner.os == 'macOS'
+        run: brew install opus opusfile ffmpeg pkg-config
+      - name: Install deps Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          choco install ffmpeg -y
+          choco install pkgconfiglite -y
+          choco install mingw -y
+          vcpkg install opus:x64-mingw-dynamic opusfile:x64-mingw-dynamic
+          echo "CC=C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/gcc.exe" >> "$GITHUB_ENV"
+          echo "CGO_CFLAGS=-IC:/vcpkg/installed/x64-mingw-dynamic/include" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-mingw-dynamic/lib -lopus -lopusfile -logg" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-mingw-dynamic/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PATH=C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin;C:/vcpkg/installed/x64-mingw-dynamic/bin;$PATH" >> "$GITHUB_ENV"
+      - name: Test
+        run: go test ./...
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p dist/${{ matrix.asset }}
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/ime-asr.exe ./cmd/ime-asr
+          else
+            go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/ime-asr ./cmd/ime-asr
+          fi
+          cp README.md LICENSE dist/${{ matrix.asset }}/ 2>/dev/null || true
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a ${{ matrix.asset }}.zip ${{ matrix.asset }}
+          else
+            tar -czf ${{ matrix.asset }}.tar.gz ${{ matrix.asset }}
+          fi
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.${{ matrix.archive }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > checksums.txt
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*

@@ -34,11 +34,13 @@ jobs:
         run: |
           choco install ffmpeg -y
           choco install pkgconfiglite -y
+          choco install mingw -y
           vcpkg install opus:x64-mingw-dynamic opusfile:x64-mingw-dynamic
+          echo "CC=C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/gcc.exe" >> "$GITHUB_ENV"
           echo "CGO_CFLAGS=-IC:/vcpkg/installed/x64-mingw-dynamic/include" >> "$GITHUB_ENV"
           echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-mingw-dynamic/lib -lopus -lopusfile -logg" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-mingw-dynamic/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "PATH=C:/vcpkg/installed/x64-mingw-dynamic/bin;$PATH" >> "$GITHUB_ENV"
+          echo "PATH=C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin;C:/vcpkg/installed/x64-mingw-dynamic/bin;$PATH" >> "$GITHUB_ENV"
       - name: Test
         run: go test ./...
       - name: Build

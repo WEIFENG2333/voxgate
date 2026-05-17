@@ -34,7 +34,8 @@ jobs:
           choco install pkgconfiglite -y
           vcpkg install opus:x64-windows opusfile:x64-windows
           echo "CGO_CFLAGS=-IC:/vcpkg/installed/x64-windows/include" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-windows/lib -lopus" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-windows/lib -lopus -lopusfile -logg" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-windows/lib/pkgconfig" >> "$GITHUB_ENV"
       - name: Test
         run: go test ./...
       - name: Build

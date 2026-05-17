@@ -30,7 +30,7 @@ jobs:
           - os: ubuntu-24.04-arm
             asset: ime-asr_linux_arm64
             archive: tar.gz
-          - os: macos-13
+          - os: macos-15-intel
             asset: ime-asr_darwin_amd64
             archive: tar.gz
           - os: macos-14

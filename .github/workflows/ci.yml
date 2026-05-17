@@ -22,17 +22,17 @@ jobs:
           go-version: "1.22.x"
       - name: Install deps Linux
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libopus-dev ffmpeg pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libopusfile-dev ffmpeg pkg-config
       - name: Install deps macOS
         if: runner.os == 'macOS'
-        run: brew install opus ffmpeg pkg-config
+        run: brew install opus opusfile ffmpeg pkg-config
       - name: Install deps Windows
         if: runner.os == 'Windows'
         shell: bash
         run: |
           choco install ffmpeg -y
           choco install pkgconfiglite -y
-          vcpkg install opus:x64-windows
+          vcpkg install opus:x64-windows opusfile:x64-windows
           echo "CGO_CFLAGS=-IC:/vcpkg/installed/x64-windows/include" >> "$GITHUB_ENV"
           echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-windows/lib -lopus" >> "$GITHUB_ENV"
       - name: Test

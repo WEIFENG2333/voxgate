@@ -65,6 +65,7 @@ jobs:
           echo "PKG_CONFIG=C:/ProgramData/chocolatey/bin/pkg-config.exe" >> "$GITHUB_ENV"
           echo "CGO_CFLAGS=-IC:/vcpkg/installed/x64-mingw-dynamic/include" >> "$GITHUB_ENV"
           echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-mingw-dynamic/lib -lopus -lopusfile -logg" >> "$GITHUB_ENV"
+          echo "IME_ASR_FFMPEG=C:/ProgramData/chocolatey/bin/ffmpeg.exe" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-mingw-dynamic/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "PATH=C:/ProgramData/mingw64/mingw64/bin;C:/vcpkg/installed/x64-mingw-dynamic/bin;$PATH" >> "$GITHUB_ENV"
       - name: Test

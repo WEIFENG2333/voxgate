@@ -52,7 +52,7 @@ func Open(ctx context.Context, path string, inputFormat string, sampleRate int) 
 }
 
 func ConvertFile(ctx context.Context, path string) (*Source, error) {
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1")
+	cmd := exec.CommandContext(ctx, ffmpegPath(), "-hide_banner", "-loglevel", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1")
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -69,7 +69,7 @@ func ConvertBytes(ctx context.Context, data []byte, sourceRate int) (*Source, er
 		args = append(args, "-f", "s16le", "-ac", "1", "-ar", fmt.Sprint(sourceRate))
 	}
 	args = append(args, "-i", "pipe:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1")
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, ffmpegPath(), args...)
 	cmd.Stdin = bytes.NewReader(data)
 	out, err := cmd.Output()
 	if err != nil {
@@ -79,6 +79,13 @@ func ConvertBytes(ctx context.Context, data []byte, sourceRate int) (*Source, er
 		return nil, err
 	}
 	return NewSourceFromPCM(out), nil
+}
+
+func ffmpegPath() string {
+	if path := os.Getenv("IME_ASR_FFMPEG"); path != "" {
+		return path
+	}
+	return "ffmpeg"
 }
 
 func (s *Source) NextFrame() ([]byte, bool, error) {

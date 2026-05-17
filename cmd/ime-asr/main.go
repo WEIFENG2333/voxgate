@@ -270,8 +270,14 @@ func doctor(cfg config.Config) int {
 			fmt.Fprintf(os.Stderr, "OK   %s\n", name)
 		}
 	}
-	_, err := exec.LookPath("ffmpeg")
-	check("ffmpeg", err)
+	if path := os.Getenv("IME_ASR_FFMPEG"); path != "" {
+		_, err := os.Stat(path)
+		check("ffmpeg", err)
+	} else {
+		_, err := exec.LookPath("ffmpeg")
+		check("ffmpeg", err)
+	}
+	var err error
 	_, err = audio.NewOpusEncoder()
 	check("libopus", err)
 	_, err = asr.LoadCredentials(cfg.CredentialPath)

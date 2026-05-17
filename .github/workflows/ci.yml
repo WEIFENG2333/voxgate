@@ -6,6 +6,8 @@ on:
 
 jobs:
   test:
+    env:
+      CGO_ENABLED: "1"
     strategy:
       fail-fast: false
       matrix:

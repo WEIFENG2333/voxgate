@@ -57,10 +57,10 @@ func WriteResult(w io.Writer, format string, result asr.Result) error {
 	case VerboseJSON:
 		return json.NewEncoder(w).Encode(result)
 	case SRT:
-		return writeSRT(w, result.Segments, result.Text)
+		return writeSRT(w, result)
 	case VTT:
 		_, _ = fmt.Fprint(w, "WEBVTT\n\n")
-		return writeCues(w, result.Segments, result.Text, true)
+		return writeCues(w, result, true)
 	case NDJSON:
 		return json.NewEncoder(w).Encode(asr.Event{Type: asr.EventTranscriptDone, Text: result.Text, Duration: result.Duration})
 	default:
@@ -83,13 +83,14 @@ func WriteEvent(w io.Writer, format string, event asr.Event) error {
 	}
 }
 
-func writeSRT(w io.Writer, segments []asr.Segment, text string) error {
-	return writeCues(w, segments, text, false)
+func writeSRT(w io.Writer, result asr.Result) error {
+	return writeCues(w, result, false)
 }
 
-func writeCues(w io.Writer, segments []asr.Segment, text string, vtt bool) error {
+func writeCues(w io.Writer, result asr.Result, vtt bool) error {
+	segments := result.Segments
 	if len(segments) == 0 {
-		segments = []asr.Segment{{Index: 0, Text: text, Start: 0, End: 0}}
+		segments = []asr.Segment{{Index: 0, Text: result.Text, Start: 0, End: result.Duration}}
 	}
 	for i, seg := range segments {
 		if !vtt {

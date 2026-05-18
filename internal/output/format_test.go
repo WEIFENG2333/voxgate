@@ -1,6 +1,12 @@
 package output
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/WEIFENG2333/ime-asr/internal/asr"
+)
 
 func TestDefaultFormat(t *testing.T) {
 	if DefaultFormat(false, true) != Text {
@@ -39,5 +45,16 @@ func TestFormatTimestamp(t *testing.T) {
 	}
 	if got := FormatTimestamp(1.2, "."); got != "00:00:01.200" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestSubtitleFallbackUsesDuration(t *testing.T) {
+	var b bytes.Buffer
+	err := WriteResult(&b, SRT, asr.Result{Text: "hello", Duration: 3.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "00:00:00,000 --> 00:00:03,500") {
+		t.Fatalf("bad srt fallback: %q", b.String())
 	}
 }

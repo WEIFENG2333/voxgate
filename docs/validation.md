@@ -71,6 +71,46 @@ Using a real 5 s Chinese sample, the CLI successfully transcribed:
 
 The text differed slightly between lossless WAV and lossy encoded variants, which is expected for ASR over compressed audio. All formats produced non-empty Chinese text.
 
+## Public AISHELL Probe
+
+Additional validation used public AISHELL-1 samples from speaker `S0002` downloaded from Hugging Face. The transcript file was used only as a rough reference; punctuation and Arabic numerals are backend-normalized and were not scored as formal WER.
+
+CLI JSON on five separate real utterances:
+
+| ID | Duration | Exit | Elapsed | Note |
+|---|---:|---:|---:|---|
+| `BAC009S0002W0122` | 5.999 s | 0 | 1 s | returned non-empty text |
+| `BAC009S0002W0123` | 3.865 s | 0 | 1 s | returned non-empty text; backend dropped part of the phrase |
+| `BAC009S0002W0124` | 5.409 s | 0 | 2 s | returned non-empty text |
+| `BAC009S0002W0125` | 3.167 s | 0 | 1 s | returned non-empty text |
+| `BAC009S0002W0126` | 2.576 s | 0 | 1 s | returned non-empty text |
+
+Format/container coverage from `BAC009S0002W0122`:
+
+| Input | Exit | Elapsed | Result |
+|---|---:|---:|---|
+| WAV | 0 | 2 s | JSON text returned |
+| MP3 | 0 | 2 s | JSON text returned |
+| M4A/AAC | 0 | 1 s | JSON text returned |
+| MP4/H.264 + AAC | 0 | 2 s | JSON text returned |
+| SRT | 0 | 2 s | fallback cue now uses full audio duration |
+| NDJSON stream | 0 | 2 s | emitted task/session events and transcript deltas |
+
+HTTP server validation on the same sample:
+
+- `/health` returned `{"status":"ok"}`.
+- `/v1/models` returned `ime-asr`.
+- `/v1/audio/transcriptions` returned JSON text for MP3 input.
+- `stream=true` returned SSE `transcript.text.delta` events.
+- The OpenAI Python SDK smoke client returned text.
+- The OpenAI Go SDK smoke client returned text.
+
+Long-file validation from 71 concatenated AISHELL utterances:
+
+| Duration | Mode | Exit | Elapsed | Output |
+|---:|---|---:|---:|---:|
+| 360 s | default auto chunk (`300s + 60s`) | 0 | 40 s | 2812 bytes JSON |
+
 ## OpenAI SDK Probe
 
 Both SDK clients were run against local `ime-asr serve` with bearer auth:
@@ -96,6 +136,6 @@ Both returned:
 ## Remaining Gaps
 
 - Need a larger licensed fixture set committed or downloaded by script rather than relying on a local workspace sample.
-- Need OpenAI Python and Go SDK smoke tests wired into one command.
+- Need OpenAI Python and Go SDK smoke tests wired into one command for CI-safe mock mode.
 - Need WER calculation once fixtures include reference transcripts.
 - Need a future subtitle-timing layer if precise SRT/VTT alignment is required.

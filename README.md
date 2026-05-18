@@ -1,12 +1,12 @@
 # ime-asr
 
-`ime-asr` is a Go CLI and local HTTP server that exposes a research-only IME ASR backend through an OpenAI-compatible transcription API.
+`ime-asr` is a research CLI and local HTTP server for Chinese speech transcription. It wraps a non-public input-method ASR WebSocket backend and exposes an OpenAI-compatible `/v1/audio/transcriptions` API.
 
-中文：`ime-asr` 是一个 Go 编写的命令行工具和本地 HTTP 服务，把社区逆向的输入法 ASR WebSocket 接口封装成 OpenAI Audio Transcription 兼容接口。
+中文：`ime-asr` 是一个中文语音转文字工具，支持命令行转写本地文件，也可以启动本地 OpenAI 兼容 HTTP 服务。
 
-## Compliance
+## Important Notice
 
-This project uses a non-public input method ASR API without official authorization. It is for learning and research only, must not be used commercially, and may be blocked or changed at any time.
+This project uses a non-public input-method ASR API without official authorization. It is for learning and research only, must not be used commercially, and may stop working at any time.
 
 本项目使用非公开输入法 ASR 接口，没有官方授权。仅供学习研究，不得商用；接口可能随时变更、封禁或失效。
 
@@ -15,8 +15,9 @@ This project uses a non-public input method ASR API without official authorizati
 Requirements:
 
 - Go 1.22+
-- `libopus` development package
 - `ffmpeg`
+- `libopus` development package
+- CGO enabled
 
 Linux:
 
@@ -34,9 +35,44 @@ go install github.com/WEIFENG2333/ime-asr/cmd/ime-asr@latest
 
 Windows:
 
-Install ffmpeg and libopus through MSYS2 or vcpkg, then build with CGO enabled.
+Install `ffmpeg`, `pkg-config`, a C compiler, and `libopus` through MSYS2 or vcpkg, then build with `CGO_ENABLED=1`.
+
+## Quick Start
+
+Transcribe a file:
+
+```bash
+ime-asr transcribe speech.wav
+```
+
+Return OpenAI-style JSON:
+
+```bash
+ime-asr transcribe speech.mp3 --format json
+```
+
+Generate coarse subtitles:
+
+```bash
+ime-asr transcribe speech.m4a --format srt -o speech.srt
+ime-asr transcribe speech.mp4 --format vtt -o speech.vtt
+```
+
+Stream events as NDJSON:
+
+```bash
+ime-asr transcribe speech.wav --stream
+```
+
+Start the OpenAI-compatible local server:
+
+```bash
+ime-asr serve --host 127.0.0.1 --port 8080 --auth-token local-token
+```
 
 ## CLI
+
+Commands:
 
 ```bash
 ime-asr transcribe <file|->
@@ -46,88 +82,133 @@ ime-asr auth
 ime-asr version
 ```
 
+Common `transcribe` options:
+
+| Option | Description |
+|---|---|
+| `--format text|json|verbose_json|srt|vtt|ndjson` | output format |
+| `--stream` | stream incremental output |
+| `--output <file>` / `-o <file>` | write to file |
+| `--input-format wav|pcm16|raw` | stdin input format |
+| `--sample-rate <hz>` | raw PCM sample rate |
+| `--request-timeout <duration>` | per-session timeout |
+
+Advanced compatibility options:
+
+| Option | Description |
+|---|---|
+| `--language <code>` / `-l <code>` | accepted for OpenAI compatibility; backend effectively ignores it |
+| `--prompt <text>` | accepted for compatibility; not sent to the backend |
+| `--no-punctuation` | disable punctuation |
+| `--disable-three-pass` | disable the third recognition pass |
+| `--realtime` | send audio at 20 ms pacing |
+| `--no-chunk` | disable long-file chunking for protocol probing |
+| `--chunk-duration <duration>` | default `300s` |
+
+Default output format:
+
+| Situation | Default |
+|---|---|
+| stdout is a terminal | `text` |
+| stdout is piped or redirected | `json` |
+| `--stream` is set | `ndjson` |
+
 Examples:
 
 ```bash
-ime-asr transcribe sample.wav
-ime-asr transcribe sample.mp3 --format json
-ime-asr transcribe sample.m4a --format srt -o sample.srt
-ime-asr transcribe sample.flac --format vtt
-cat sample.wav | ime-asr transcribe - --input-format wav --stream
-ime-asr transcribe raw.pcm --input-format raw --sample-rate 16000 --format verbose_json
+ime-asr transcribe speech.wav
+ime-asr transcribe speech.mp3 --format json
+ime-asr transcribe speech.m4a --format verbose_json
+ime-asr transcribe speech.flac --format srt -o speech.srt
+ime-asr transcribe speech.mp4 --format vtt -o speech.vtt
+cat speech.wav | ime-asr transcribe - --input-format wav --stream
+ime-asr transcribe raw.pcm --input-format raw --sample-rate 16000 --format json
 ```
 
-Default output:
+## Long Audio Strategy
 
-- stdout is TTY: `text`
-- stdout is pipe/file: `json`
-- `--stream`: `ndjson`
+The backend is optimized for IME-style speech, not arbitrary long batch transcription in one WebSocket session.
+
+Current policy:
+
+| Input length | Behavior |
+|---|---|
+| `<= 300s` | one WebSocket session |
+| `> 300s` | split into serial 300-second chunks, one WebSocket session per chunk |
+
+Chunking is time based after ffmpeg converts audio to `16kHz mono PCM`. Boundaries are aligned to 20 ms Opus frames. The chunker is not silence-aware yet and does not add overlap.
+
+SRT/VTT timestamps are coarse. For chunked long files, cue ranges are chunk offsets in the original file timeline, not word-level or sentence-level ASR timestamps.
 
 ## Server
+
+Start:
 
 ```bash
 ime-asr serve --host 127.0.0.1 --port 8080
 ime-asr serve --auth-token local-token
 ime-asr serve --max-concurrency 8 --request-timeout 120s
-ime-asr serve --host 0.0.0.0 --port 8080
-ime-asr serve --enable-realtime
 ```
 
-Endpoints:
+Implemented endpoints:
 
-| Path | Method | Status |
+| Path | Method | Notes |
 |---|---|---|
-| `/v1/audio/transcriptions` | POST multipart | implemented |
-| `/v1/audio/translations` | POST | returns 400 |
-| `/v1/models` | GET | implemented |
-| `/v1/realtime` | WebSocket | placeholder |
-| `/health` | GET | implemented |
-| `/metrics` | GET | implemented |
+| `/v1/audio/transcriptions` | POST multipart | OpenAI-compatible transcription |
+| `/v1/audio/translations` | POST | returns 400; translation is unsupported |
+| `/v1/models` | GET | returns `ime-asr` |
+| `/health` | GET | health check |
+| `/metrics` | GET | minimal Prometheus text |
 
-Python OpenAI SDK example:
+`/v1/realtime` is reserved for future work and currently returns an error.
+
+Python OpenAI SDK:
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="local-token")
-with open("sample.wav", "rb") as f:
+
+with open("speech.wav", "rb") as f:
     result = client.audio.transcriptions.create(
         model="ime-asr",
         file=f,
         response_format="json",
     )
+
 print(result.text)
 ```
 
-Go OpenAI SDK smoke client:
-
-```bash
-cd tests/e2e/openai-go-client
-go run . --base-url http://127.0.0.1:8080/v1 --api-key local-token ../../../sample.wav
-```
-
-SSE:
+SSE streaming:
 
 ```bash
 curl -N http://127.0.0.1:8080/v1/audio/transcriptions \
   -H 'Authorization: Bearer local-token' \
   -F model=ime-asr \
   -F stream=true \
-  -F file=@sample.wav
+  -F file=@speech.wav
 ```
+
+For HTTP file uploads, the client uploads the multipart body first. The local server then decodes the file and streams transcription events back as SSE. This is output streaming, not bidirectional upload streaming.
 
 ## OpenAI Compatibility
 
-| OpenAI parameter | Behavior |
+| OpenAI field | Behavior |
 |---|---|
 | `file` | supported |
 | `model` | accepted, ignored |
 | `response_format` | `json`, `text`, `srt`, `vtt`, `verbose_json` |
-| `stream=true` | SSE with `transcript.text.delta` / `transcript.text.done` |
+| `stream=true` | SSE events `transcript.text.delta` and `transcript.text.done` |
 | `language` | accepted, backend effectively ignores it |
-| `prompt` | accepted for compatibility, not sent to backend |
+| `prompt` | accepted, not sent to backend |
 | `temperature` | ignored |
-| translations endpoint | unsupported |
+| translations | unsupported |
+
+Errors use OpenAI-style JSON:
+
+```json
+{"error":{"message":"...","type":"invalid_request_error","code":"..."}}
+```
 
 ## Configuration
 
@@ -150,9 +231,10 @@ server:
   port: 8080
   auth_token: ""
   max_concurrency: 4
+  request_timeout: 60s
 ```
 
-Environment variables use `IME_ASR_*`. `DOUBAO_ASR_*` aliases are also accepted for compatibility.
+Environment variables use `IME_ASR_*`. `DOUBAO_ASR_*` aliases are accepted for compatibility with older local setups.
 
 ## Development
 
@@ -160,14 +242,18 @@ Environment variables use `IME_ASR_*`. `DOUBAO_ASR_*` aliases are also accepted 
 make build
 make test
 make test-e2e
+make probe
 make doctor
 ```
 
-The integration tests use a mock WebSocket server and do not require the real backend. Real endpoint tests are in `tests/e2e/` and require network access plus a still-working backend.
+CI runs on Linux, macOS Intel, macOS Apple Silicon, and Windows. It checks formatting, runs `go vet`, runs unit/integration tests, runs Linux race tests, and builds the CLI.
+
+Real endpoint probes are under `tests/e2e/` and require network access plus a still-working backend.
 
 ## Known Limits
 
 - The backend is non-public and unstable.
-- Word timestamps are not provided; SRT/VTT cue timing is coarse until richer timing extraction is added.
-- Realtime WebSocket compatibility is reserved but not fully implemented yet.
-- Cross-platform release uses native CGO builds because libopus is a system dependency.
+- Long-file chunking is serial, not parallel.
+- SRT/VTT timing is coarse and not suitable for precise subtitle alignment yet.
+- `/v1/realtime` is not implemented.
+- Cross-platform release uses native CGO builds because `libopus` is a system dependency.

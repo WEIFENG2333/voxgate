@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -143,6 +144,9 @@ func transcribe(args []string, cfg config.Config) int {
 	noChunk := fs.Bool("no-chunk", false, "disable long-file chunking")
 	chunkDuration := fs.Duration("chunk-duration", transcriber.DefaultChunkDuration, "long-file chunk duration")
 	if err := fs.Parse(reorderTranscribeArgs(args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if fs.NArg() != 1 {
@@ -153,6 +157,15 @@ func transcribe(args []string, cfg config.Config) int {
 	chosen := *format
 	if chosen == "" {
 		chosen = output.DefaultFormat(*stream, stdoutTTY)
+	}
+	if *stream {
+		if !output.ValidStreamFormat(chosen) {
+			printErr("invalid_format", fmt.Errorf("stream format %q is unsupported; use text, json, verbose_json, or ndjson", chosen))
+			return 2
+		}
+	} else if !output.ValidResultFormat(chosen) {
+		printErr("invalid_format", fmt.Errorf("format %q is unsupported", chosen))
+		return 2
 	}
 	w := os.Stdout
 	if *outPath != "" {
@@ -241,9 +254,12 @@ func serve(args []string, cfg config.Config) int {
 	port := fs.Int("port", cfg.Server.Port, "port")
 	authToken := fs.String("auth-token", cfg.Server.AuthToken, "optional bearer token")
 	maxConc := fs.Int("max-concurrency", cfg.Server.MaxConcurrency, "max concurrent requests")
-	timeout := fs.Duration("request-timeout", 60*time.Second, "request timeout")
+	timeout := fs.Duration("request-timeout", config.ServerRequestTimeout(cfg), "request timeout")
 	realtime := fs.Bool("enable-realtime", false, "enable /v1/realtime")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	srv := server.New(server.Config{

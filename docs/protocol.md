@@ -145,7 +145,7 @@ The client should choose strategy by input mode:
 | short file, default | one WS session, send frames as fast as server tolerates |
 | long file | split PCM into bounded chunks, run multiple sessions, concatenate results |
 | live microphone/realtime stream | one WS session, send frames every 20 ms |
-| stream output for file | single-session event stream for short files; long-file streaming needs chunk boundary events before it should be exposed as stable API |
+| stream output for file | single-session event stream; HTTP multipart upload completes before SSE output starts |
 
 Recommended defaults:
 
@@ -163,6 +163,7 @@ Open design questions:
 - whether realtime throttling allows single sessions beyond 60 seconds reliably
 - whether repeated identical audio triggers de-duplication or abuse heuristics
 - whether chunk boundaries need silence padding or overlap to reduce dropped boundary syllables
+- whether chunked streaming should be exposed once boundary events and timestamp semantics are stable
 - whether `enable_asr_threepass=false` changes latency or long-session stability
 
 ## Response Parsing
@@ -226,7 +227,8 @@ Long-file batch flow:
 - Timestamp formatting tests for SRT/VTT
 - VAD reset boundary tests
 - Mock WebSocket three-pass flow with reset
-- HTTP server JSON/SSE tests planned as next hardening target
+- HTTP server JSON/SSE tests with a mock WebSocket backend
+- CLI command-surface tests for help and early format validation
 - Real endpoint e2e scripts are included but require network access and a working non-public endpoint
 
 ## Current Strategy Decision

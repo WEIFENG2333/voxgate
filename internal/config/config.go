@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -85,6 +86,22 @@ func applyEnv(c *Config) {
 	if v := firstEnv("DOUBAO_ASR_SERVER_AUTH_TOKEN", "IME_ASR_SERVER_AUTH_TOKEN"); v != "" {
 		c.Server.AuthToken = v
 	}
+	if v := firstEnv("DOUBAO_ASR_SERVER_MAX_CONCURRENCY", "IME_ASR_SERVER_MAX_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Server.MaxConcurrency = n
+		}
+	}
+	if v := firstEnv("DOUBAO_ASR_SERVER_REQUEST_TIMEOUT", "IME_ASR_SERVER_REQUEST_TIMEOUT"); v != "" {
+		c.Server.RequestTimeout = v
+	}
+}
+
+func ServerRequestTimeout(c Config) time.Duration {
+	d, err := time.ParseDuration(c.Server.RequestTimeout)
+	if err != nil || d <= 0 {
+		return 60 * time.Second
+	}
+	return d
 }
 
 func firstEnv(keys ...string) string {

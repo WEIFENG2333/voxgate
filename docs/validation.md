@@ -24,6 +24,7 @@ Passed packages:
 - config priority
 - mock WebSocket ASR client
 - HTTP JSON and SSE endpoints with mock WebSocket backend
+- CLI help and early format validation
 
 ## Real Protocol Probe
 
@@ -97,4 +98,4 @@ Both returned:
 - Need a larger licensed fixture set committed or downloaded by script rather than relying on a local workspace sample.
 - Need OpenAI Python and Go SDK smoke tests wired into one command.
 - Need WER calculation once fixtures include reference transcripts.
-- Need cross-platform GitHub Actions confirmation after the repository is pushed.
+- Need a future subtitle-timing layer if precise SRT/VTT alignment is required.

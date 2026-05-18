@@ -19,6 +19,24 @@ const (
 	NDJSON      = "ndjson"
 )
 
+func ValidResultFormat(format string) bool {
+	switch format {
+	case Text, JSON, VerboseJSON, SRT, VTT, NDJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidStreamFormat(format string) bool {
+	switch format {
+	case Text, JSON, VerboseJSON, NDJSON:
+		return true
+	default:
+		return false
+	}
+}
+
 func DefaultFormat(stream, stdoutTTY bool) string {
 	if stream {
 		return NDJSON

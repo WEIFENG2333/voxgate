@@ -66,6 +66,46 @@ func TestTranscriptionsSSEWithMockWebSocket(t *testing.T) {
 	}
 }
 
+func TestTranscriptionsRejectsUnsupportedFormatBeforeASR(t *testing.T) {
+	srv := New(Config{RequestTimeout: 10 * time.Second})
+	body, contentType := multipartBody(t, "test.wav", minimalWAV(), field{"response_format", "xml"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unsupported_response_format") {
+		t.Fatalf("bad error: %s", rec.Body.String())
+	}
+}
+
+func TestTranscriptionsRejectsSubtitleStreamFormat(t *testing.T) {
+	srv := New(Config{RequestTimeout: 10 * time.Second})
+	body, contentType := multipartBody(t, "test.wav", minimalWAV(), field{"stream", "true"}, field{"response_format", "srt"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unsupported_response_format") {
+		t.Fatalf("bad error: %s", rec.Body.String())
+	}
+}
+
+func TestHealthRequiresGET(t *testing.T) {
+	srv := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func mockASRServer(t *testing.T, finalText string) (string, func()) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}

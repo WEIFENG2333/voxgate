@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/WEIFENG2333/ime-asr/internal/asr"
@@ -64,15 +63,24 @@ func (s *Server) Addr() string {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = fmt.Fprintln(w, "ime_asr_up 1")
 }
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
 	if !s.authorize(w, r) {
 		return
 	}
@@ -80,10 +88,22 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) translations(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodPost) {
+		return
+	}
+	if !s.authorize(w, r) {
+		return
+	}
 	writeOpenAIError(w, http.StatusBadRequest, "unsupported_request_error", "Doubao IME ASR does not support translation to English", "unsupported")
 }
 
 func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	if !s.authorize(w, r) {
+		return
+	}
 	if !s.Config.EnableRealtime {
 		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "realtime endpoint is disabled", "not_found")
 		return
@@ -92,11 +112,11 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(w, r) {
-		return
-	}
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed", "method_not_allowed")
+		return
+	}
+	if !s.authorize(w, r) {
 		return
 	}
 	select {
@@ -112,6 +132,15 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	}
 	responseFormat := formValue(r.MultipartForm, "response_format", output.JSON)
 	stream := formBool(r.MultipartForm, "stream")
+	if stream {
+		if !output.ValidStreamFormat(responseFormat) {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("stream response_format %q is unsupported", responseFormat), "unsupported_response_format")
+			return
+		}
+	} else if !output.ValidResultFormat(responseFormat) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("response_format %q is unsupported", responseFormat), "unsupported_response_format")
+		return
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "missing multipart file field", "missing_file")
@@ -235,6 +264,14 @@ func writeSSE(w http.ResponseWriter, event string, data any) {
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 }
 
+func allowMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == method {
+		return true
+	}
+	writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed", "method_not_allowed")
+	return false
+}
+
 func formValue(f *multipart.Form, key, fallback string) string {
 	if f != nil && len(f.Value[key]) > 0 && f.Value[key][0] != "" {
 		return f.Value[key][0]
@@ -253,10 +290,4 @@ func contentType(format string) string {
 		return "text/plain; charset=utf-8"
 	}
 	return "application/json"
-}
-
-var metricsOnce sync.Once
-
-func init() {
-	metricsOnce.Do(func() {})
 }

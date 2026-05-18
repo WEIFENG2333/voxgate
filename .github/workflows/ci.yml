@@ -43,7 +43,15 @@ jobs:
           echo "IME_ASR_FFMPEG=C:/ProgramData/chocolatey/bin/ffmpeg.exe" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-mingw-dynamic/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "PATH=C:/ProgramData/mingw64/mingw64/bin;C:/vcpkg/installed/x64-mingw-dynamic/bin;$PATH" >> "$GITHUB_ENV"
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Vet
+        run: go vet ./...
       - name: Test
         run: go test ./...
+      - name: Race test
+        if: runner.os == 'Linux'
+        run: go test -race ./...
       - name: Build
         run: go build ./cmd/ime-asr

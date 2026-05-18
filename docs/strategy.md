@@ -13,14 +13,14 @@ The backend behaves like an input-method ASR service, not a general long-form ba
 
 ## Working Limits
 
-Based on local probes, a single session handles short utterances and roughly one-minute file inputs. A 10-minute single session can close normally without text. That is treated as a backend/session limit until disproven.
+Based on local probes, a single session handles short utterances and file inputs up to at least 480 seconds for the repeated Chinese probe sample. 540 and 570 second single-session probes closed without text, and a 10-minute single session also failed. That is treated as a backend/session limit until disproven.
 
 ## Default Policy
 
 | Input | Policy |
 |---|---|
 | short file | one session, fast upload |
-| long file | automatic 55 s chunks, one session per chunk |
+| long file | automatic 300 s chunks, one session per chunk |
 | realtime | one session, 20 ms pacing |
 | HTTP non-stream | same chunking policy as CLI |
 | HTTP stream | single session for now; long-stream chunked SSE is not marked stable |

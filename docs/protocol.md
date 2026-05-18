@@ -129,8 +129,10 @@ These are empirical findings from local probes against the real endpoint, not gu
 | 4.2 s Chinese WAV | succeeds, returns final text | basic protobuf/Opus/WS flow is correct |
 | 60 s Chinese WAV, sent as fast as possible | succeeds, returns multiple VAD segments | file-mode faster-than-realtime upload can work for moderate lengths |
 | 60 s Chinese WAV, realtime paced | succeeds in about 63 s, same output length as fast mode | realtime pacing is not required for moderate file chunks |
+| 90/120/180/300/480 s Chinese WAV, one WS session | succeeds | the practical single-session limit is higher than one minute |
+| 540/570 s Chinese WAV, one WS session | exits with no transcript text | failure appears near the 9-minute range for the probe sample |
 | 10 min repeated Chinese WAV, one WS session | exits after about 78 s with no transcript text | one long batch session is not reliable |
-| 10 min repeated Chinese WAV, split into ~55 s sessions | succeeds in about 94 s, returns concatenated transcript | long-file CLI/server mode should chunk and stitch |
+| 10 min repeated Chinese WAV, split into bounded sessions | succeeds, returns concatenated transcript | long-file CLI/server mode should chunk and stitch |
 
 The current working assumption is that the endpoint is optimized for IME utterances and moderate continuous dictation, not arbitrary long offline batch transcription in one session. A normal WebSocket close with no text must be treated as a protocol failure, not as successful empty transcription.
 
@@ -147,7 +149,7 @@ The client should choose strategy by input mode:
 
 Recommended defaults:
 
-- chunk long files at 45-60 seconds until more probing proves a larger safe window
+- chunk long files at 300 seconds by default; this is below the observed 540 s failure point while avoiding excessive handshakes
 - use fresh `request_id` per chunk/session
 - reuse cached device credentials and token across chunks
 - retry one failed session after token refresh

@@ -41,12 +41,20 @@ Latest observed matrix:
 | 5 s fast without three-pass | 0 | 1 s | 63 bytes |
 | 60 s fast | 0 | 9 s | 621 bytes |
 | 60 s realtime paced | 0 | 63 s | 621 bytes |
+| 90 s single session | 0 | 30 s | 927 bytes |
+| 120 s single session | 0 | 22 s | 1218 bytes |
+| 180 s single session | 0 | 34 s | 1821 bytes |
+| 300 s single session | 0 | 55 s | 3012 bytes |
+| 480 s single session | 0 | 97 s | 4479 bytes |
+| 540 s single session | 1 | 74 s | no transcript |
+| 570 s single session | 1 | 72 s | no transcript |
 | 10 min single session | 1 | 78 s | no transcript |
 | 10 min auto chunk | 0 | 94 s | 6042 bytes |
 
 Interpretation:
 
 - short and medium files are accepted in one session
+- 300 s chunks are below the observed failure point and reduce handshake overhead compared with the previous 55 s conservative default
 - realtime pacing is not necessary for 60 s file input
 - long single-session file transcription is not reliable
 - automatic chunking is required for long file mode

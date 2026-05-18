@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultLongAudioThreshold = 70 * time.Second
-	DefaultChunkDuration      = 55 * time.Second
+	DefaultChunkDuration      = 300 * time.Second
 )
 
 type Config struct {

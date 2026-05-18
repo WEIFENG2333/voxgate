@@ -19,11 +19,17 @@ Based on local probes, a single session handles short utterances and file inputs
 
 | Input | Policy |
 |---|---|
-| short file | one session, fast upload |
-| long file | automatic 300 s chunks, one session per chunk |
+| file <= 300 s | one session, fast upload |
+| file > 300 s | automatic 300 s chunks, one session per chunk |
 | realtime | one session, 20 ms pacing |
 | HTTP non-stream | same chunking policy as CLI |
 | HTTP stream | single session for now; long-stream chunked SSE is not marked stable |
+
+The chunker is currently time based: after ffmpeg normalization to 16 kHz mono PCM, it slices by PCM byte offset and aligns each boundary to a 20 ms Opus frame. It is not silence-aware, does not run VAD before splitting, and does not add overlap.
+
+Chunked file transcription is serial. The client opens one WebSocket session for chunk 0, waits for its final result, then opens the next WebSocket session for chunk 1. Chunks are not sent concurrently, and a multi-chunk file is not kept inside one long WebSocket session. This keeps ordering, retry handling, and backend throttling behavior predictable.
+
+Segment timestamps returned for chunked long files are chunk ranges in the original file timeline, for example `0-300`, `300-600`. They are real offsets for the chunk boundaries, but they are not word-level or utterance-level ASR timestamps. SRT/VTT output is therefore usable as coarse captions today, not as precision subtitle alignment.
 
 ## Why Not Always Realtime
 

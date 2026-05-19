@@ -39,6 +39,16 @@ func TestChunkPolicyOverrides(t *testing.T) {
 	}
 }
 
+func TestStreamChunkDurationCapsAtFallbackDuration(t *testing.T) {
+	if got := (Runner{}).streamChunkDuration(); got != fallbackChunkDuration {
+		t.Fatalf("default stream chunk duration = %v, want %v", got, fallbackChunkDuration)
+	}
+	r := Runner{Config: Config{ChunkDuration: 30 * time.Second}}
+	if got := r.streamChunkDuration(); got != 30*time.Second {
+		t.Fatalf("short stream chunk duration = %v, want 30s", got)
+	}
+}
+
 func TestTranscribeChunksFallsBackOnEmptyChunk(t *testing.T) {
 	src := silentSource(120 * time.Second)
 	client := fakeStreamClient{emptyAbove: fallbackChunkDuration}

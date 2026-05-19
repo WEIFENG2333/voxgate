@@ -60,8 +60,62 @@ func (r Runner) Stream(ctx context.Context, src *audio.Source, opts asr.Options)
 	return client.Transcribe(ctx, src, enc, opts)
 }
 
+func (r Runner) StreamWithChunking(ctx context.Context, src *audio.Source, opts asr.Options, allowChunking bool) (<-chan asr.Event, error) {
+	if !allowChunking || src.Duration() <= r.threshold() {
+		return r.Stream(ctx, src, opts)
+	}
+	client := asr.Client{Config: asr.ClientConfig{
+		CredentialPath: r.Config.CredentialPath,
+		UserAgent:      r.Config.UserAgent,
+		WebSocketURL:   r.Config.WebSocketURL,
+	}}
+	out := make(chan asr.Event, 32)
+	go r.streamChunks(ctx, out, client, src.Chunks(r.streamChunkDuration()), opts)
+	return out, nil
+}
+
 type streamClient interface {
 	Transcribe(context.Context, asr.PCMFrameSource, asr.PCMFrameEncoder, asr.Options) (<-chan asr.Event, error)
+}
+
+func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client streamClient, chunks []*audio.Source, opts asr.Options) {
+	defer close(out)
+	var b strings.Builder
+	var offset float64
+	nextSegmentIndex := 0
+	for _, chunk := range chunks {
+		enc, err := audio.NewOpusEncoder()
+		if err != nil {
+			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "encoder_error", Message: err.Error()}}
+			return
+		}
+		events, err := client.Transcribe(ctx, chunk, enc, opts)
+		if err != nil {
+			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "asr_error", Message: err.Error()}}
+			return
+		}
+		chunkText := ""
+		for ev := range events {
+			if ev.Type == asr.EventError {
+				out <- ev
+				return
+			}
+			switch ev.Type {
+			case asr.EventTranscriptSegment:
+				ev.Start += offset
+				ev.End += offset
+				ev.SegmentIndex = nextSegmentIndex
+				nextSegmentIndex++
+			case asr.EventTranscriptDone:
+				chunkText = ev.Text
+				continue
+			}
+			out <- ev
+		}
+		b.WriteString(chunkText)
+		offset += chunk.Duration().Seconds()
+	}
+	out <- asr.Event{Type: asr.EventTranscriptDone, Text: b.String(), Duration: offset}
 }
 
 func (r Runner) transcribeChunks(ctx context.Context, client streamClient, chunks []*audio.Source, opts asr.Options) (asr.Result, error) {
@@ -178,4 +232,12 @@ func (r Runner) chunkDuration() time.Duration {
 		return r.Config.ChunkDuration
 	}
 	return DefaultChunkDuration
+}
+
+func (r Runner) streamChunkDuration() time.Duration {
+	d := r.chunkDuration()
+	if d <= 0 || d > fallbackChunkDuration {
+		return fallbackChunkDuration
+	}
+	return d
 }

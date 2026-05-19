@@ -22,7 +22,7 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/transcriber"
 )
 
-const version = "0.2.2"
+const version = "0.2.3"
 
 type globalFlags struct {
 	configPath     string
@@ -193,7 +193,7 @@ func transcribe(args []string, cfg config.Config) int {
 	opts.Realtime = *realtime
 	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: cfg.CredentialPath, UserAgent: cfg.ASR.UserAgent, ChunkDuration: *chunkDuration}}
 	if *stream {
-		events, err := runner.Stream(ctx, src, opts)
+		events, err := runner.StreamWithChunking(ctx, src, opts, !*noChunk)
 		if err != nil {
 			printErr("asr_error", err)
 			return 1

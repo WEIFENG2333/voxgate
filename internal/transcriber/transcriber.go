@@ -2,6 +2,7 @@ package transcriber
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,7 +14,10 @@ import (
 const (
 	DefaultChunkDuration      = 300 * time.Second
 	DefaultLongAudioThreshold = DefaultChunkDuration
+	fallbackChunkDuration     = 60 * time.Second
 )
+
+var ErrEmptyTranscript = errors.New("no transcript text returned")
 
 type Config struct {
 	CredentialPath string
@@ -56,31 +60,89 @@ func (r Runner) Stream(ctx context.Context, src *audio.Source, opts asr.Options)
 	return client.Transcribe(ctx, src, enc, opts)
 }
 
-func (r Runner) transcribeChunks(ctx context.Context, client asr.Client, chunks []*audio.Source, opts asr.Options) (asr.Result, error) {
+type streamClient interface {
+	Transcribe(context.Context, asr.PCMFrameSource, asr.PCMFrameEncoder, asr.Options) (<-chan asr.Event, error)
+}
+
+func (r Runner) transcribeChunks(ctx context.Context, client streamClient, chunks []*audio.Source, opts asr.Options) (asr.Result, error) {
 	var b strings.Builder
 	var segments []asr.Segment
 	var offset float64
+	nextSegmentIndex := 0
 	for i, chunk := range chunks {
-		enc, err := audio.NewOpusEncoder()
-		if err != nil {
-			return asr.Result{}, err
-		}
-		events, err := client.Transcribe(ctx, chunk, enc, opts)
-		if err != nil {
-			return asr.Result{}, err
-		}
-		res, err := collect(events)
+		res, err := r.transcribeChunkWithFallback(ctx, client, chunk, opts, offset, &nextSegmentIndex)
 		if err != nil {
 			return asr.Result{}, fmt.Errorf("chunk %d: %w", i, err)
 		}
-		if strings.TrimSpace(res.Text) == "" {
-			return asr.Result{}, fmt.Errorf("chunk %d produced empty transcript", i)
-		}
 		b.WriteString(res.Text)
-		segments = append(segments, asr.Segment{Index: i, Text: res.Text, Start: offset, End: offset + chunk.Duration().Seconds()})
+		segments = append(segments, res.Segments...)
 		offset += chunk.Duration().Seconds()
 	}
 	return asr.Result{Text: b.String(), Language: opts.Language, Duration: offset, Segments: segments}, nil
+}
+
+func (r Runner) transcribeChunkWithFallback(ctx context.Context, client streamClient, chunk *audio.Source, opts asr.Options, offset float64, nextSegmentIndex *int) (asr.Result, error) {
+	res, err := transcribeOne(ctx, client, chunk, opts)
+	if err == nil {
+		if strings.TrimSpace(res.Text) == "" {
+			err = ErrEmptyTranscript
+		} else {
+			return normalizeChunkResult(res, opts.Language, offset, chunk.Duration().Seconds(), nextSegmentIndex), nil
+		}
+	}
+	if !errors.Is(err, ErrEmptyTranscript) || chunk.Duration() <= fallbackChunkDuration {
+		if errors.Is(err, ErrEmptyTranscript) {
+			return asr.Result{Language: opts.Language, Duration: chunk.Duration().Seconds()}, nil
+		}
+		return asr.Result{}, err
+	}
+
+	var combined asr.Result
+	var b strings.Builder
+	subOffset := offset
+	for _, sub := range chunk.Chunks(fallbackChunkDuration) {
+		subRes, subErr := r.transcribeChunkWithFallback(ctx, client, sub, opts, subOffset, nextSegmentIndex)
+		if subErr != nil {
+			return asr.Result{}, subErr
+		}
+		b.WriteString(subRes.Text)
+		combined.Segments = append(combined.Segments, subRes.Segments...)
+		subOffset += sub.Duration().Seconds()
+	}
+	combined.Text = b.String()
+	combined.Language = opts.Language
+	combined.Duration = chunk.Duration().Seconds()
+	return combined, nil
+}
+
+func transcribeOne(ctx context.Context, client streamClient, src *audio.Source, opts asr.Options) (asr.Result, error) {
+	enc, err := audio.NewOpusEncoder()
+	if err != nil {
+		return asr.Result{}, err
+	}
+	events, err := client.Transcribe(ctx, src, enc, opts)
+	if err != nil {
+		return asr.Result{}, err
+	}
+	return collect(events)
+}
+
+func normalizeChunkResult(res asr.Result, language string, offset, duration float64, nextSegmentIndex *int) asr.Result {
+	res.Language = language
+	res.Duration = duration
+	if len(res.Segments) == 0 {
+		res.Segments = []asr.Segment{{Text: res.Text, Start: offset, End: offset + duration}}
+	} else {
+		for i := range res.Segments {
+			res.Segments[i].Start += offset
+			res.Segments[i].End += offset
+		}
+	}
+	for i := range res.Segments {
+		res.Segments[i].Index = *nextSegmentIndex
+		(*nextSegmentIndex)++
+	}
+	return res
 }
 
 func collect(events <-chan asr.Event) (asr.Result, error) {
@@ -99,7 +161,7 @@ func collect(events <-chan asr.Event) (asr.Result, error) {
 		}
 	}
 	if strings.TrimSpace(result.Text) == "" {
-		return result, fmt.Errorf("no transcript text returned")
+		return result, ErrEmptyTranscript
 	}
 	return result, nil
 }

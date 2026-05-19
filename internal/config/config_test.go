@@ -26,6 +26,24 @@ func TestLoadPriorityEnvOverridesFile(t *testing.T) {
 	}
 }
 
+func TestLoadExpandsCredentialPath(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("credential_path: ~/.config/voxgate/credentials.json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".config", "voxgate", "credentials.json")
+	if c.CredentialPath != want {
+		t.Fatalf("credential path = %q, want %q", c.CredentialPath, want)
+	}
+}
+
 func TestServerRequestTimeout(t *testing.T) {
 	c := Default()
 	c.Server.RequestTimeout = "2m"
@@ -33,7 +51,7 @@ func TestServerRequestTimeout(t *testing.T) {
 		t.Fatalf("timeout = %v, want 2m", got)
 	}
 	c.Server.RequestTimeout = "not-a-duration"
-	if got := ServerRequestTimeout(c); got != 60*time.Second {
-		t.Fatalf("bad timeout fallback = %v, want 60s", got)
+	if got := ServerRequestTimeout(c); got != DefaultServerRequestTimeout {
+		t.Fatalf("bad timeout fallback = %v, want %v", got, DefaultServerRequestTimeout)
 	}
 }

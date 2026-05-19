@@ -11,6 +11,8 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/asr"
 )
 
+const DefaultServerRequestTimeout = 10 * time.Minute
+
 type Config struct {
 	CredentialPath string `yaml:"credential_path"`
 	LogLevel       string `yaml:"log_level"`
@@ -40,14 +42,14 @@ func Default() Config {
 	c.Server.Host = "127.0.0.1"
 	c.Server.Port = 8080
 	c.Server.MaxConcurrency = 4
-	c.Server.RequestTimeout = "60s"
+	c.Server.RequestTimeout = DefaultServerRequestTimeout.String()
 	return c
 }
 
 func Load(path string) (Config, error) {
 	c := Default()
 	if path != "" {
-		data, err := os.ReadFile(expandHome(path))
+		data, err := os.ReadFile(ExpandPath(path))
 		if err != nil {
 			return c, err
 		}
@@ -56,6 +58,7 @@ func Load(path string) (Config, error) {
 		}
 	}
 	applyEnv(&c)
+	c.CredentialPath = ExpandPath(c.CredentialPath)
 	return c, nil
 }
 
@@ -90,12 +93,12 @@ func applyEnv(c *Config) {
 func ServerRequestTimeout(c Config) time.Duration {
 	d, err := time.ParseDuration(c.Server.RequestTimeout)
 	if err != nil || d <= 0 {
-		return 60 * time.Second
+		return DefaultServerRequestTimeout
 	}
 	return d
 }
 
-func expandHome(path string) string {
+func ExpandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return home + "/" + strings.TrimPrefix(path, "~/")

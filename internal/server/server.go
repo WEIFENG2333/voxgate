@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ func New(cfg Config) *Server {
 		cfg.MaxConcurrency = 4
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 60 * time.Second
+		cfg.RequestTimeout = 10 * time.Minute
 	}
 	if !cfg.EnablePunctuation && !cfg.EnableThreePass && !cfg.EnableTwoPass {
 		cfg.EnablePunctuation = true
@@ -174,7 +175,7 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	opts.Prompt = formValue(r.MultipartForm, "prompt", "")
 	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: s.Config.CredentialPath, UserAgent: s.Config.UserAgent, WebSocketURL: s.Config.WebSocketURL}}
 	if stream {
-		events, err := runner.Stream(ctx, src, opts)
+		events, err := runner.StreamWithChunking(ctx, src, opts, true)
 		if err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error(), "transcribe_failed")
 			return
@@ -244,7 +245,11 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 }
 
 func writeTemp(file multipart.File, header *multipart.FileHeader) (string, error) {
-	tmp, err := os.CreateTemp("", "voxgate-*-"+header.Filename)
+	name := "upload"
+	if header != nil && header.Filename != "" {
+		name = filepath.Base(header.Filename)
+	}
+	tmp, err := os.CreateTemp("", "voxgate-*-"+name)
 	if err != nil {
 		return "", err
 	}

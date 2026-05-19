@@ -148,7 +148,7 @@ voxgate serve
 voxgate serve --host 127.0.0.1 --port 8080 --auth-token local-token
 
 # serve: higher concurrency and longer request timeout
-voxgate serve --max-concurrency 8 --request-timeout 180s
+voxgate serve --max-concurrency 8 --request-timeout 10m
 
 # auth/doctor/version
 voxgate auth
@@ -178,7 +178,7 @@ Start:
 ```bash
 voxgate serve --host 127.0.0.1 --port 8080
 voxgate serve --auth-token local-token
-voxgate serve --max-concurrency 8 --request-timeout 120s
+voxgate serve --max-concurrency 8 --request-timeout 10m
 ```
 
 Implemented endpoints:
@@ -262,7 +262,7 @@ server:
   port: 8080
   auth_token: ""
   max_concurrency: 4
-  request_timeout: 60s
+  request_timeout: 10m
 ```
 
 Environment variables use the `VOXGATE_*` prefix.

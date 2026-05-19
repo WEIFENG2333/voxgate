@@ -22,7 +22,7 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/transcriber"
 )
 
-const version = "0.2.4"
+const version = "0.2.5"
 
 type globalFlags struct {
 	configPath     string
@@ -54,7 +54,7 @@ func run(args []string) int {
 		return 1
 	}
 	if g.credentialPath != "" {
-		cfg.CredentialPath = g.credentialPath
+		cfg.CredentialPath = config.ExpandPath(g.credentialPath)
 	}
 	if g.logLevel != "" {
 		cfg.LogLevel = g.logLevel
@@ -67,7 +67,7 @@ func run(args []string) int {
 	case "transcribe":
 		return transcribe(rest[1:], cfg)
 	case "serve":
-		return serve(rest[1:], cfg)
+		return serve(rest[1:], cfg, g)
 	case "doctor":
 		return doctor(cfg)
 	case "auth":
@@ -90,24 +90,20 @@ func parseGlobal(args []string) (globalFlags, []string, error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch a {
-		case "--config":
-			i++
-			if i >= len(args) {
-				return g, nil, fmt.Errorf("--config needs a value")
+		case "--config", "--credential-path", "--log-level":
+			if i+1 >= len(args) {
+				return g, nil, fmt.Errorf("%s needs a value", a)
 			}
-			g.configPath = args[i]
-		case "--credential-path":
+			value := args[i+1]
 			i++
-			if i >= len(args) {
-				return g, nil, fmt.Errorf("--credential-path needs a value")
+			switch a {
+			case "--config":
+				g.configPath = value
+			case "--credential-path":
+				g.credentialPath = value
+			case "--log-level":
+				g.logLevel = value
 			}
-			g.credentialPath = args[i]
-		case "--log-level":
-			i++
-			if i >= len(args) {
-				return g, nil, fmt.Errorf("--log-level needs a value")
-			}
-			g.logLevel = args[i]
 		case "-v":
 			g.logLevel = "debug"
 		case "-q", "--quiet":
@@ -117,8 +113,7 @@ func parseGlobal(args []string) (globalFlags, []string, error) {
 		case "--no-color":
 			g.noColor = true
 		default:
-			rest = append(rest, args[i:]...)
-			return g, rest, nil
+			rest = append(rest, a)
 		}
 	}
 	return g, rest, nil
@@ -248,7 +243,7 @@ func reorderTranscribeArgs(args []string) []string {
 	return append(flagsPart, pos...)
 }
 
-func serve(args []string, cfg config.Config) int {
+func serve(args []string, cfg config.Config, g globalFlags) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	host := fs.String("host", cfg.Server.Host, "host")
 	port := fs.Int("port", cfg.Server.Port, "port")
@@ -267,13 +262,33 @@ func serve(args []string, cfg config.Config) int {
 		CredentialPath: cfg.CredentialPath, EnableRealtime: *realtime, EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass: cfg.ASR.EnableThreePass, EnableTwoPass: cfg.ASR.EnableTwoPass, UserAgent: cfg.ASR.UserAgent,
 	})
-	fmt.Fprintf(os.Stderr, "voxgate serving http://%s\n", srv.Addr())
-	fmt.Fprintf(os.Stderr, "endpoints: http://%s/v1/audio/transcriptions http://%s/v1/models http://%s/health\n", srv.Addr(), srv.Addr(), srv.Addr())
+	if !g.quiet {
+		logStartup(g, srv.Addr())
+	}
 	if err := http.ListenAndServe(srv.Addr(), srv.Handler()); err != nil {
 		printErr("server_error", err)
 		return 1
 	}
 	return 0
+}
+
+func logStartup(g globalFlags, addr string) {
+	baseURL := "http://" + addr
+	if g.jsonLogs {
+		_ = json.NewEncoder(os.Stderr).Encode(map[string]any{
+			"level": "info",
+			"msg":   "server started",
+			"url":   baseURL,
+			"endpoints": []string{
+				baseURL + "/v1/audio/transcriptions",
+				baseURL + "/v1/models",
+				baseURL + "/health",
+			},
+		})
+		return
+	}
+	fmt.Fprintf(os.Stderr, "voxgate serving %s\n", baseURL)
+	fmt.Fprintf(os.Stderr, "endpoints: %s/v1/audio/transcriptions %s/v1/models %s/health\n", baseURL, baseURL, baseURL)
 }
 
 func doctor(cfg config.Config) int {

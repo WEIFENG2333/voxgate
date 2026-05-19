@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -101,7 +102,7 @@ func ServerRequestTimeout(c Config) time.Duration {
 func ExpandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
-			return home + "/" + strings.TrimPrefix(path, "~/")
+			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 		}
 	}
 	return path

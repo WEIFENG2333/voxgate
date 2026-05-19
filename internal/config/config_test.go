@@ -30,6 +30,7 @@ func TestLoadExpandsCredentialPath(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("credential_path: ~/.config/voxgate/credentials.json\n"), 0o600); err != nil {
 		t.Fatal(err)

@@ -85,9 +85,6 @@ func ffmpegPath() string {
 	if path := os.Getenv("VOXGATE_FFMPEG"); path != "" {
 		return path
 	}
-	if path := os.Getenv("IME_ASR_FFMPEG"); path != "" {
-		return path
-	}
 	return "ffmpeg"
 }
 

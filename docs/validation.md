@@ -5,7 +5,7 @@ Last local validation in this workspace used:
 - Go 1.24.4 local toolchain with `go 1.22` module target
 - system `libopus` 1.3.1
 - system ffmpeg 2.4.3
-- real cached IME ASR credentials
+- real cached backend credentials
 
 ## Unit And Integration
 

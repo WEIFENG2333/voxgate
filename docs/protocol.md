@@ -1,11 +1,8 @@
-# IME ASR Protocol Notes
+# Voxgate Protocol Notes
 
-This document summarizes the implementation notes extracted from:
+This document summarizes the protocol behavior implemented by `voxgate`, based on public reverse-engineering references and local probes.
 
-- `missuo/koe`: `koe-asr/src/doubaoime.rs`, `koe-asr/src/transcript.rs`
-- `WEIFENG2333/doubao-asr`: `doubaoime_asr/asr.proto`, `device.py`, `asr.py`, `config.py`
-
-## Compatibility Notice
+## API Notice
 
 The backend is a non-public input-method ASR endpoint. It is not an official public API, may change or stop working without notice, and should be used only for learning and research.
 
@@ -34,7 +31,7 @@ ASR auth token is fetched through:
 - Header `x-ss-stub` is uppercase `MD5("body=null")`
 - Response path: `data.settings.asr_config.app_key`
 
-The Rust reference refreshes after 12 hours and falls back to the cached token if refresh fails. `voxgate` follows that behavior.
+`voxgate` refreshes tokens after 12 hours and falls back to the cached token if refresh fails.
 
 ## WebSocket Handshake
 

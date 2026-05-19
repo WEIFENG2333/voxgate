@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$ROOT/bin/voxgate"
 AUDIO_DIR="$ROOT/tests/audio"
 REPORT="${1:-$ROOT/tests/e2e/protocol_probe.jsonl}"
-SOURCE="${VOXGATE_PROBE_SOURCE:-/data00/home/liangweifeng/qwen3-forced-aligner/samples/zh.wav}"
+SOURCE="${VOXGATE_PROBE_SOURCE:-$AUDIO_DIR/zh_5s.wav}"
 
 mkdir -p "$AUDIO_DIR" "$(dirname "$REPORT")"
 

@@ -286,7 +286,7 @@ func doctor(cfg config.Config) int {
 			fmt.Fprintf(os.Stderr, "OK   %s\n", name)
 		}
 	}
-	if path := firstEnv("VOXGATE_FFMPEG", "IME_ASR_FFMPEG"); path != "" {
+	if path := os.Getenv("VOXGATE_FFMPEG"); path != "" {
 		_, err := os.Stat(path)
 		check("ffmpeg", err)
 	} else {
@@ -324,17 +324,8 @@ func printErr(code string, err error) {
 	_ = json.NewEncoder(os.Stderr).Encode(map[string]any{"error": map[string]any{"code": code, "message": err.Error(), "details": map[string]any{}}})
 }
 
-func firstEnv(keys ...string) string {
-	for _, key := range keys {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func usage() {
-	fmt.Fprintln(os.Stderr, strings.TrimSpace(`voxgate - OpenAI-compatible CLI for IME ASR research
+	fmt.Fprintln(os.Stderr, strings.TrimSpace(`voxgate - OpenAI-compatible CLI for speech transcription research
 
 Usage:
   voxgate [global flags] transcribe <file|->

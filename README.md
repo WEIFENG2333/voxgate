@@ -93,7 +93,7 @@ Common `transcribe` options:
 | `--sample-rate <hz>` | raw PCM sample rate |
 | `--request-timeout <duration>` | per-session timeout |
 
-Advanced compatibility options:
+Advanced options:
 
 | Option | Description |
 |---|---|
@@ -265,7 +265,7 @@ server:
   request_timeout: 60s
 ```
 
-Environment variables use `VOXGATE_*`. Legacy `IME_ASR_*` and `DOUBAO_ASR_*` aliases are accepted for older local setups.
+Environment variables use the `VOXGATE_*` prefix.
 
 ## Development
 

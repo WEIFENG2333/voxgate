@@ -13,10 +13,10 @@ func TestLoadPriorityEnvOverridesFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("credential_path: file.json\nserver:\n  port: 9000\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("IME_ASR_CREDENTIAL_PATH", "env.json")
-	t.Setenv("IME_ASR_SERVER_PORT", "7777")
-	t.Setenv("IME_ASR_SERVER_MAX_CONCURRENCY", "9")
-	t.Setenv("IME_ASR_SERVER_REQUEST_TIMEOUT", "90s")
+	t.Setenv("VOXGATE_CREDENTIAL_PATH", "env.json")
+	t.Setenv("VOXGATE_SERVER_PORT", "7777")
+	t.Setenv("VOXGATE_SERVER_MAX_CONCURRENCY", "9")
+	t.Setenv("VOXGATE_SERVER_REQUEST_TIMEOUT", "90s")
 	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)

@@ -29,7 +29,7 @@ func main() {
 	)
 	result, err := client.Audio.Transcriptions.New(context.Background(), openai.AudioTranscriptionNewParams{
 		File:           f,
-		Model:          "ime-asr",
+		Model:          "voxgate",
 		ResponseFormat: openai.AudioResponseFormatJSON,
 	})
 	if err != nil {

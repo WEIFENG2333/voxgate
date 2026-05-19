@@ -1,4 +1,4 @@
-module github.com/WEIFENG2333/ime-asr
+module github.com/WEIFENG2333/voxgate
 
 go 1.22
 

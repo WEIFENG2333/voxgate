@@ -47,7 +47,7 @@ tests/e2e/protocol_probe.sh
 Optional source:
 
 ```bash
-IME_ASR_PROBE_SOURCE=/path/to/chinese.wav tests/e2e/protocol_probe.sh report.jsonl
+VOXGATE_PROBE_SOURCE=/path/to/chinese.wav tests/e2e/protocol_probe.sh report.jsonl
 ```
 
 The report records exit code, elapsed time, and whether text was returned for each mode. This is the source of truth for changing chunk size, pacing, or retry policy.

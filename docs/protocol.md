@@ -34,7 +34,7 @@ ASR auth token is fetched through:
 - Header `x-ss-stub` is uppercase `MD5("body=null")`
 - Response path: `data.settings.asr_config.app_key`
 
-The Rust reference refreshes after 12 hours and falls back to the cached token if refresh fails. `ime-asr` follows that behavior.
+The Rust reference refreshes after 12 hours and falls back to the cached token if refresh fails. `voxgate` follows that behavior.
 
 ## WebSocket Handshake
 
@@ -195,7 +195,7 @@ and previous does not start with current
 then append previous text to confirmed_text
 ```
 
-`ime-asr` implements the same heuristic in `internal/asr/aggregator.go` and covers it with unit and mock WebSocket integration tests.
+`voxgate` implements the same heuristic in `internal/asr/aggregator.go` and covers it with unit and mock WebSocket integration tests.
 
 ## Go State Machine
 
@@ -233,7 +233,7 @@ Long-file batch flow:
 
 ## Current Strategy Decision
 
-Until the unanswered limits above are measured more thoroughly, `ime-asr` should not promise "one WebSocket session can transcribe arbitrary long files." The stable product behavior should be:
+Until the unanswered limits above are measured more thoroughly, `voxgate` should not promise "one WebSocket session can transcribe arbitrary long files." The stable product behavior should be:
 
 - CLI and HTTP file transcription transparently chunk long inputs.
 - Realtime mode remains single-session and bounded by backend behavior.

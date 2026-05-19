@@ -14,12 +14,12 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/WEIFENG2333/ime-asr/internal/asr"
-	"github.com/WEIFENG2333/ime-asr/internal/audio"
-	"github.com/WEIFENG2333/ime-asr/internal/config"
-	"github.com/WEIFENG2333/ime-asr/internal/output"
-	"github.com/WEIFENG2333/ime-asr/internal/server"
-	"github.com/WEIFENG2333/ime-asr/internal/transcriber"
+	"github.com/WEIFENG2333/voxgate/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/audio"
+	"github.com/WEIFENG2333/voxgate/internal/config"
+	"github.com/WEIFENG2333/voxgate/internal/output"
+	"github.com/WEIFENG2333/voxgate/internal/server"
+	"github.com/WEIFENG2333/voxgate/internal/transcriber"
 )
 
 const version = "0.1.0"
@@ -73,7 +73,7 @@ func run(args []string) int {
 	case "auth":
 		return auth(cfg)
 	case "version", "--version", "-V":
-		fmt.Println("ime-asr", version)
+		fmt.Println("voxgate", version)
 		return 0
 	case "help", "--help", "-h":
 		usage()
@@ -150,7 +150,7 @@ func transcribe(args []string, cfg config.Config) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		printErr("invalid_args", fmt.Errorf("usage: ime-asr transcribe <file|->"))
+		printErr("invalid_args", fmt.Errorf("usage: voxgate transcribe <file|->"))
 		return 2
 	}
 	stdoutTTY := term.IsTerminal(int(os.Stdout.Fd()))
@@ -267,7 +267,7 @@ func serve(args []string, cfg config.Config) int {
 		CredentialPath: cfg.CredentialPath, EnableRealtime: *realtime, EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass: cfg.ASR.EnableThreePass, EnableTwoPass: cfg.ASR.EnableTwoPass, UserAgent: cfg.ASR.UserAgent,
 	})
-	fmt.Fprintf(os.Stderr, "ime-asr serving http://%s\n", srv.Addr())
+	fmt.Fprintf(os.Stderr, "voxgate serving http://%s\n", srv.Addr())
 	fmt.Fprintf(os.Stderr, "endpoints: http://%s/v1/audio/transcriptions http://%s/v1/models http://%s/health\n", srv.Addr(), srv.Addr(), srv.Addr())
 	if err := http.ListenAndServe(srv.Addr(), srv.Handler()); err != nil {
 		printErr("server_error", err)
@@ -286,7 +286,7 @@ func doctor(cfg config.Config) int {
 			fmt.Fprintf(os.Stderr, "OK   %s\n", name)
 		}
 	}
-	if path := os.Getenv("IME_ASR_FFMPEG"); path != "" {
+	if path := firstEnv("VOXGATE_FFMPEG", "IME_ASR_FFMPEG"); path != "" {
 		_, err := os.Stat(path)
 		check("ffmpeg", err)
 	} else {
@@ -324,15 +324,24 @@ func printErr(code string, err error) {
 	_ = json.NewEncoder(os.Stderr).Encode(map[string]any{"error": map[string]any{"code": code, "message": err.Error(), "details": map[string]any{}}})
 }
 
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func usage() {
-	fmt.Fprintln(os.Stderr, strings.TrimSpace(`ime-asr - OpenAI-compatible CLI for IME ASR research
+	fmt.Fprintln(os.Stderr, strings.TrimSpace(`voxgate - OpenAI-compatible CLI for IME ASR research
 
 Usage:
-  ime-asr [global flags] transcribe <file|->
-  ime-asr [global flags] serve
-  ime-asr [global flags] doctor
-  ime-asr [global flags] auth
-  ime-asr version
+  voxgate [global flags] transcribe <file|->
+  voxgate [global flags] serve
+  voxgate [global flags] doctor
+  voxgate [global flags] auth
+  voxgate version
 
 Global flags:
   --config <file>             YAML config file
@@ -344,10 +353,10 @@ Global flags:
   --json-logs                 JSON logs
 
 Examples:
-  ime-asr transcribe sample.wav
-  ime-asr transcribe sample.mp3 --format json
-  ime-asr transcribe sample.m4a --format srt -o out.srt
-  cat sample.wav | ime-asr transcribe - --stream
-  ime-asr serve --host 127.0.0.1 --port 8080
+  voxgate transcribe sample.wav
+  voxgate transcribe sample.mp3 --format json
+  voxgate transcribe sample.m4a --format srt -o out.srt
+  cat sample.wav | voxgate transcribe - --stream
+  voxgate serve --host 127.0.0.1 --port 8080
 `))
 }

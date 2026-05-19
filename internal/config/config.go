@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/WEIFENG2333/ime-asr/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/asr"
 )
 
 type Config struct {
@@ -60,38 +60,29 @@ func Load(path string) (Config, error) {
 }
 
 func applyEnv(c *Config) {
-	if v := os.Getenv("DOUBAO_ASR_CREDENTIAL_PATH"); v != "" {
+	if v := firstEnv("VOXGATE_CREDENTIAL_PATH", "IME_ASR_CREDENTIAL_PATH", "DOUBAO_ASR_CREDENTIAL_PATH"); v != "" {
 		c.CredentialPath = v
 	}
-	if v := os.Getenv("IME_ASR_CREDENTIAL_PATH"); v != "" {
-		c.CredentialPath = v
-	}
-	if v := os.Getenv("DOUBAO_ASR_LOG_LEVEL"); v != "" {
+	if v := firstEnv("VOXGATE_LOG_LEVEL", "IME_ASR_LOG_LEVEL", "DOUBAO_ASR_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
 	}
-	if v := os.Getenv("IME_ASR_LOG_LEVEL"); v != "" {
-		c.LogLevel = v
-	}
-	if v := os.Getenv("DOUBAO_ASR_SERVER_HOST"); v != "" {
+	if v := firstEnv("VOXGATE_SERVER_HOST", "IME_ASR_SERVER_HOST", "DOUBAO_ASR_SERVER_HOST"); v != "" {
 		c.Server.Host = v
 	}
-	if v := os.Getenv("IME_ASR_SERVER_HOST"); v != "" {
-		c.Server.Host = v
-	}
-	if v := firstEnv("DOUBAO_ASR_SERVER_PORT", "IME_ASR_SERVER_PORT"); v != "" {
+	if v := firstEnv("VOXGATE_SERVER_PORT", "IME_ASR_SERVER_PORT", "DOUBAO_ASR_SERVER_PORT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Server.Port = n
 		}
 	}
-	if v := firstEnv("DOUBAO_ASR_SERVER_AUTH_TOKEN", "IME_ASR_SERVER_AUTH_TOKEN"); v != "" {
+	if v := firstEnv("VOXGATE_SERVER_AUTH_TOKEN", "IME_ASR_SERVER_AUTH_TOKEN", "DOUBAO_ASR_SERVER_AUTH_TOKEN"); v != "" {
 		c.Server.AuthToken = v
 	}
-	if v := firstEnv("DOUBAO_ASR_SERVER_MAX_CONCURRENCY", "IME_ASR_SERVER_MAX_CONCURRENCY"); v != "" {
+	if v := firstEnv("VOXGATE_SERVER_MAX_CONCURRENCY", "IME_ASR_SERVER_MAX_CONCURRENCY", "DOUBAO_ASR_SERVER_MAX_CONCURRENCY"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Server.MaxConcurrency = n
 		}
 	}
-	if v := firstEnv("DOUBAO_ASR_SERVER_REQUEST_TIMEOUT", "IME_ASR_SERVER_REQUEST_TIMEOUT"); v != "" {
+	if v := firstEnv("VOXGATE_SERVER_REQUEST_TIMEOUT", "IME_ASR_SERVER_REQUEST_TIMEOUT", "DOUBAO_ASR_SERVER_REQUEST_TIMEOUT"); v != "" {
 		c.Server.RequestTimeout = v
 	}
 }

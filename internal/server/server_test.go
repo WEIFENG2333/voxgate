@@ -14,8 +14,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/WEIFENG2333/ime-asr/internal/asr"
-	asrproto "github.com/WEIFENG2333/ime-asr/internal/proto"
+	"github.com/WEIFENG2333/voxgate/internal/asr"
+	asrproto "github.com/WEIFENG2333/voxgate/internal/proto"
 )
 
 func TestTranscriptionsJSONWithMockWebSocket(t *testing.T) {
@@ -162,7 +162,7 @@ func multipartBody(t *testing.T, filename string, file []byte, fields ...field) 
 	if _, err := part.Write(file); err != nil {
 		t.Fatal(err)
 	}
-	_ = w.WriteField("model", "ime-asr")
+	_ = w.WriteField("model", "voxgate")
 	for _, f := range fields {
 		_ = w.WriteField(f.key, f.value)
 	}

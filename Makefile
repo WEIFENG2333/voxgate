@@ -1,10 +1,10 @@
-BINARY ?= ime-asr
+BINARY ?= voxgate
 GO ?= go
 
 .PHONY: build test test-e2e probe doctor clean release-snapshot
 
 build:
-	CGO_ENABLED=1 $(GO) build -o bin/$(BINARY) ./cmd/ime-asr
+	CGO_ENABLED=1 $(GO) build -o bin/$(BINARY) ./cmd/voxgate
 
 test:
 	CGO_ENABLED=1 $(GO) test ./...

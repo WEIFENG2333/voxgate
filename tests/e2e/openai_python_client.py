@@ -13,7 +13,7 @@ def main() -> None:
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
     with open(args.audio, "rb") as f:
         result = client.audio.transcriptions.create(
-            model="ime-asr",
+            model="voxgate",
             file=f,
             response_format="json",
         )

@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	asrproto "github.com/WEIFENG2333/ime-asr/internal/proto"
+	asrproto "github.com/WEIFENG2333/voxgate/internal/proto"
 )
 
 type ClientConfig struct {
@@ -68,32 +68,40 @@ func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource
 	if err != nil {
 		return err
 	}
-	err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+	retryable, err := c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
 	if err == nil {
 		return nil
+	}
+	if !retryable {
+		return err
 	}
 	creds, refreshErr := manager.Ensure(ctx, true)
 	if refreshErr != nil {
 		return err
 	}
-	return c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+	_, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+	return err
 }
 
-func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) error {
+func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) (bool, error) {
 	wsURL := c.Config.WebSocketURL
 	if wsURL == "" {
 		wsURL = WebSocketURL
 	}
 	u, err := url.Parse(wsURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	q := u.Query()
 	q.Set("aid", strconv.Itoa(AID))
 	q.Set("device_id", creds.DeviceID)
 	u.RawQuery = q.Encode()
 	header := http.Header{}
-	header.Set("User-Agent", DefaultUserAgent)
+	userAgent := c.Config.UserAgent
+	if userAgent == "" {
+		userAgent = DefaultUserAgent
+	}
+	header.Set("User-Agent", userAgent)
 	header.Set("proto-version", "v2")
 	header.Set("x-custom-keepalive", "true")
 	dialer := c.Config.Dialer
@@ -102,18 +110,18 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer conn.Close()
 	if err := sendPB(conn, asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartTask", RequestID: requestID}); err != nil {
-		return err
+		return true, err
 	}
 	resp, err := readPB(conn)
 	if err != nil {
-		return err
+		return true, err
 	}
 	if resp.MessageType == "TaskFailed" {
-		return fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
+		return true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	sessionPayload, _ := json.Marshal(map[string]any{
 		"audio_info":              map[string]any{"channel": 1, "format": "speech_opus", "sample_rate": 16000},
@@ -125,14 +133,14 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		},
 	})
 	if err := sendPB(conn, asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartSession", Payload: string(sessionPayload), RequestID: requestID}); err != nil {
-		return err
+		return true, err
 	}
 	resp, err = readPB(conn)
 	if err != nil {
-		return err
+		return true, err
 	}
 	if resp.MessageType == "SessionFailed" {
-		return fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
+		return true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	events <- Event{Type: EventSessionStarted, RequestID: requestID}
 
@@ -148,23 +156,23 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	select {
 	case err := <-sendErr:
 		if err != nil {
-			return err
+			return false, err
 		}
 		select {
 		case err := <-recvErr:
-			return err
+			return false, err
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 	case err := <-recvErr:
 		if err != nil {
-			return err
+			return false, err
 		}
 		close(done)
-		return nil
+		return false, nil
 	case <-ctx.Done():
 		close(done)
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 }
 

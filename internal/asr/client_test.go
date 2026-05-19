@@ -3,16 +3,19 @@ package asr
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 
-	asrproto "github.com/WEIFENG2333/ime-asr/internal/proto"
+	asrproto "github.com/WEIFENG2333/voxgate/internal/proto"
 )
 
 type fakeSource struct {
@@ -88,10 +91,109 @@ func TestClientMockWebSocketThreePassWithReset(t *testing.T) {
 	_ = os.Remove(credPath)
 }
 
+func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing.T) {
+	var connections atomic.Int32
+	var taskRequests atomic.Int32
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		n := connections.Add(1)
+		_, _, _ = conn.ReadMessage()
+		if n == 1 {
+			_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskFailed", StatusCode: 401, StatusMessage: "expired"}))
+			return
+		}
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			method, _ := parseTestRequestMethod(data)
+			if method == "TaskRequest" {
+				taskRequests.Add(1)
+			}
+			if method == "FinishSession" {
+				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "刷新后成功", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := SaveCredentials(credPath, Credentials{DeviceID: "1", CDID: "c", Token: "expired", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Config: ClientConfig{
+		CredentialPath: credPath,
+		WebSocketURL:   "ws" + strings.TrimPrefix(srv.URL, "http"),
+		HTTP:           &http.Client{Transport: tokenRoundTripper{}},
+	}}
+	src := &fakeSource{frames: [][]byte{{0}, {0}}}
+	events, err := client.Transcribe(context.Background(), src, fakeEncoder{}, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done string
+	for ev := range events {
+		if ev.Type == EventError {
+			t.Fatalf("event error: %+v", ev.Error)
+		}
+		if ev.Type == EventTranscriptDone {
+			done = ev.Text
+		}
+	}
+	if done != "刷新后成功" {
+		t.Fatalf("bad done text: %q", done)
+	}
+	if connections.Load() != 2 {
+		t.Fatalf("connections = %d, want 2", connections.Load())
+	}
+	if src.i != 2 {
+		t.Fatalf("source consumed %d frames, want 2", src.i)
+	}
+	if taskRequests.Load() != 3 {
+		t.Fatalf("task requests = %d, want 3 including final silence frame", taskRequests.Load())
+	}
+}
+
 func sendResult(t *testing.T, conn *websocket.Conn, v map[string]any) {
 	t.Helper()
 	data, _ := json.Marshal(v)
 	if err := conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(data)})); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func parseTestRequestMethod(data []byte) (string, error) {
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] == 0x2a {
+			l := int(data[i+1])
+			if i+2+l <= len(data) {
+				return string(data[i+2 : i+2+l]), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+type tokenRoundTripper struct{}
+
+func (tokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"data":{"settings":{"asr_config":{"app_key":"fresh"}}}}`)),
+		Request:    req,
+	}, nil
 }

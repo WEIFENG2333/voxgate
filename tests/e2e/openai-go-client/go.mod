@@ -1,4 +1,4 @@
-module github.com/WEIFENG2333/ime-asr/tests/e2e/openai-go-client
+module github.com/WEIFENG2333/voxgate/tests/e2e/openai-go-client
 
 go 1.24.4
 

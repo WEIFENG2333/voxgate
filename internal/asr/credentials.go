@@ -48,9 +48,9 @@ type CredentialManager struct {
 
 func DefaultCredentialPath() string {
 	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".config", "ime-asr", "credentials.json")
+		return filepath.Join(home, ".config", "voxgate", "credentials.json")
 	}
-	return filepath.Join(os.TempDir(), "ime-asr-credentials.json")
+	return filepath.Join(os.TempDir(), "voxgate-credentials.json")
 }
 
 func (m CredentialManager) Ensure(ctx context.Context, forceRefresh bool) (Credentials, error) {

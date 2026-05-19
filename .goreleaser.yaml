@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: ime-asr
-    main: ./cmd/ime-asr
-    binary: ime-asr
+  - id: voxgate
+    main: ./cmd/voxgate
+    binary: voxgate
     env:
       - CGO_ENABLED=1
     goos:

@@ -25,19 +25,19 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            asset: ime-asr_linux_amd64
+            asset: voxgate_linux_amd64
             archive: tar.gz
           - os: ubuntu-24.04-arm
-            asset: ime-asr_linux_arm64
+            asset: voxgate_linux_arm64
             archive: tar.gz
           - os: macos-15-intel
-            asset: ime-asr_darwin_amd64
+            asset: voxgate_darwin_amd64
             archive: tar.gz
           - os: macos-14
-            asset: ime-asr_darwin_arm64
+            asset: voxgate_darwin_arm64
             archive: tar.gz
           - os: windows-latest
-            asset: ime-asr_windows_amd64
+            asset: voxgate_windows_amd64
             archive: zip
     runs-on: ${{ matrix.os }}
     env:
@@ -65,7 +65,7 @@ jobs:
           echo "PKG_CONFIG=C:/ProgramData/chocolatey/bin/pkg-config.exe" >> "$GITHUB_ENV"
           echo "CGO_CFLAGS=-IC:/vcpkg/installed/x64-mingw-dynamic/include" >> "$GITHUB_ENV"
           echo "CGO_LDFLAGS=-LC:/vcpkg/installed/x64-mingw-dynamic/lib -lopus -lopusfile -logg" >> "$GITHUB_ENV"
-          echo "IME_ASR_FFMPEG=C:/ProgramData/chocolatey/bin/ffmpeg.exe" >> "$GITHUB_ENV"
+          echo "VOXGATE_FFMPEG=C:/ProgramData/chocolatey/bin/ffmpeg.exe" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-mingw-dynamic/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "PATH=C:/ProgramData/mingw64/mingw64/bin;C:/vcpkg/installed/x64-mingw-dynamic/bin;$PATH" >> "$GITHUB_ENV"
       - name: Vet
@@ -77,9 +77,9 @@ jobs:
         run: |
           mkdir -p dist/${{ matrix.asset }}
           if [ "${{ runner.os }}" = "Windows" ]; then
-            go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/ime-asr.exe ./cmd/ime-asr
+            go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/voxgate.exe ./cmd/voxgate
           else
-            go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/ime-asr ./cmd/ime-asr
+            go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/voxgate ./cmd/voxgate
           fi
           cp README.md LICENSE dist/${{ matrix.asset }}/ 2>/dev/null || true
       - name: Package

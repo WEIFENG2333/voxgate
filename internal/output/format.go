@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/WEIFENG2333/ime-asr/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/asr"
 )
 
 const (

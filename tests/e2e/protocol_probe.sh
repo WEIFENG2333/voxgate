@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="$ROOT/bin/ime-asr"
+BIN="$ROOT/bin/voxgate"
 AUDIO_DIR="$ROOT/tests/audio"
 REPORT="${1:-$ROOT/tests/e2e/protocol_probe.jsonl}"
-SOURCE="${IME_ASR_PROBE_SOURCE:-/data00/home/liangweifeng/qwen3-forced-aligner/samples/zh.wav}"
+SOURCE="${VOXGATE_PROBE_SOURCE:-/data00/home/liangweifeng/qwen3-forced-aligner/samples/zh.wav}"
 
 mkdir -p "$AUDIO_DIR" "$(dirname "$REPORT")"
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/WEIFENG2333/ime-asr/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/asr"
 )
 
 func TestDefaultFormat(t *testing.T) {

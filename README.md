@@ -1,8 +1,8 @@
-# ime-asr
+# voxgate
 
-`ime-asr` is a research CLI and local HTTP server for Chinese speech transcription. It wraps a non-public input-method ASR WebSocket backend and exposes an OpenAI-compatible `/v1/audio/transcriptions` API.
+`voxgate` is a research CLI and local HTTP server for Chinese speech transcription. It wraps a non-public input-method ASR WebSocket backend and exposes an OpenAI-compatible `/v1/audio/transcriptions` API.
 
-中文：`ime-asr` 是一个中文语音转文字工具，支持命令行转写本地文件，也可以启动本地 OpenAI 兼容 HTTP 服务。
+中文：`voxgate` 是一个中文语音转文字工具，支持命令行转写本地文件，也可以启动本地 OpenAI 兼容 HTTP 服务。
 
 ## Important Notice
 
@@ -23,14 +23,14 @@ Linux:
 
 ```bash
 sudo apt-get install -y ffmpeg libopus-dev pkg-config
-go install github.com/WEIFENG2333/ime-asr/cmd/ime-asr@latest
+go install github.com/WEIFENG2333/voxgate/cmd/voxgate@latest
 ```
 
 macOS:
 
 ```bash
 brew install ffmpeg opus pkg-config
-go install github.com/WEIFENG2333/ime-asr/cmd/ime-asr@latest
+go install github.com/WEIFENG2333/voxgate/cmd/voxgate@latest
 ```
 
 Windows:
@@ -42,32 +42,32 @@ Install `ffmpeg`, `pkg-config`, a C compiler, and `libopus` through MSYS2 or vcp
 Transcribe a file:
 
 ```bash
-ime-asr transcribe speech.wav
+voxgate transcribe speech.wav
 ```
 
 Return OpenAI-style JSON:
 
 ```bash
-ime-asr transcribe speech.mp3 --format json
+voxgate transcribe speech.mp3 --format json
 ```
 
 Generate coarse subtitles:
 
 ```bash
-ime-asr transcribe speech.m4a --format srt -o speech.srt
-ime-asr transcribe speech.mp4 --format vtt -o speech.vtt
+voxgate transcribe speech.m4a --format srt -o speech.srt
+voxgate transcribe speech.mp4 --format vtt -o speech.vtt
 ```
 
 Stream events as NDJSON:
 
 ```bash
-ime-asr transcribe speech.wav --stream
+voxgate transcribe speech.wav --stream
 ```
 
 Start the OpenAI-compatible local server:
 
 ```bash
-ime-asr serve --host 127.0.0.1 --port 8080 --auth-token local-token
+voxgate serve --host 127.0.0.1 --port 8080 --auth-token local-token
 ```
 
 ## CLI
@@ -75,11 +75,11 @@ ime-asr serve --host 127.0.0.1 --port 8080 --auth-token local-token
 Commands:
 
 ```bash
-ime-asr transcribe <file|->
-ime-asr serve
-ime-asr doctor
-ime-asr auth
-ime-asr version
+voxgate transcribe <file|->
+voxgate serve
+voxgate doctor
+voxgate auth
+voxgate version
 ```
 
 Common `transcribe` options:
@@ -116,13 +116,44 @@ Default output format:
 Examples:
 
 ```bash
-ime-asr transcribe speech.wav
-ime-asr transcribe speech.mp3 --format json
-ime-asr transcribe speech.m4a --format verbose_json
-ime-asr transcribe speech.flac --format srt -o speech.srt
-ime-asr transcribe speech.mp4 --format vtt -o speech.vtt
-cat speech.wav | ime-asr transcribe - --input-format wav --stream
-ime-asr transcribe raw.pcm --input-format raw --sample-rate 16000 --format json
+voxgate transcribe speech.wav
+voxgate transcribe speech.mp3 --format json
+voxgate transcribe speech.m4a --format verbose_json
+voxgate transcribe speech.flac --format srt -o speech.srt
+voxgate transcribe speech.mp4 --format vtt -o speech.vtt
+cat speech.wav | voxgate transcribe - --input-format wav --stream
+voxgate transcribe raw.pcm --input-format raw --sample-rate 16000 --format json
+```
+
+More command examples:
+
+```bash
+# transcribe: human-readable default on a terminal
+voxgate transcribe meeting.wav
+
+# transcribe: script-friendly OpenAI JSON
+voxgate transcribe meeting.mp3 --format json > meeting.json
+
+# transcribe: streaming NDJSON for agents
+voxgate transcribe meeting.wav --stream --format ndjson
+
+# transcribe: subtitle files with coarse timing
+voxgate transcribe lecture.mp4 --format srt -o lecture.srt
+voxgate transcribe lecture.mp4 --format vtt -o lecture.vtt
+
+# serve: local OpenAI-compatible API
+voxgate serve
+
+# serve: protected local API for SDK clients
+voxgate serve --host 127.0.0.1 --port 8080 --auth-token local-token
+
+# serve: higher concurrency and longer request timeout
+voxgate serve --max-concurrency 8 --request-timeout 180s
+
+# auth/doctor/version
+voxgate auth
+voxgate doctor
+voxgate version
 ```
 
 ## Long Audio Strategy
@@ -145,9 +176,9 @@ SRT/VTT timestamps are coarse. For chunked long files, cue ranges are chunk offs
 Start:
 
 ```bash
-ime-asr serve --host 127.0.0.1 --port 8080
-ime-asr serve --auth-token local-token
-ime-asr serve --max-concurrency 8 --request-timeout 120s
+voxgate serve --host 127.0.0.1 --port 8080
+voxgate serve --auth-token local-token
+voxgate serve --max-concurrency 8 --request-timeout 120s
 ```
 
 Implemented endpoints:
@@ -156,7 +187,7 @@ Implemented endpoints:
 |---|---|---|
 | `/v1/audio/transcriptions` | POST multipart | OpenAI-compatible transcription |
 | `/v1/audio/translations` | POST | returns 400; translation is unsupported |
-| `/v1/models` | GET | returns `ime-asr` |
+| `/v1/models` | GET | returns `voxgate` |
 | `/health` | GET | health check |
 | `/metrics` | GET | minimal Prometheus text |
 
@@ -171,7 +202,7 @@ client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="local-token")
 
 with open("speech.wav", "rb") as f:
     result = client.audio.transcriptions.create(
-        model="ime-asr",
+        model="voxgate",
         file=f,
         response_format="json",
     )
@@ -184,7 +215,7 @@ SSE streaming:
 ```bash
 curl -N http://127.0.0.1:8080/v1/audio/transcriptions \
   -H 'Authorization: Bearer local-token' \
-  -F model=ime-asr \
+  -F model=voxgate \
   -F stream=true \
   -F file=@speech.wav
 ```
@@ -221,7 +252,7 @@ flags > environment variables > YAML config > defaults
 Example:
 
 ```yaml
-credential_path: ~/.config/ime-asr/credentials.json
+credential_path: ~/.config/voxgate/credentials.json
 asr:
   enable_punctuation: true
   enable_three_pass: true
@@ -234,7 +265,7 @@ server:
   request_timeout: 60s
 ```
 
-Environment variables use `IME_ASR_*`. `DOUBAO_ASR_*` aliases are accepted for compatibility with older local setups.
+Environment variables use `VOXGATE_*`. Legacy `IME_ASR_*` and `DOUBAO_ASR_*` aliases are accepted for older local setups.
 
 ## Development
 

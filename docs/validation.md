@@ -99,7 +99,7 @@ Format/container coverage from `BAC009S0002W0122`:
 HTTP server validation on the same sample:
 
 - `/health` returned `{"status":"ok"}`.
-- `/v1/models` returned `ime-asr`.
+- `/v1/models` returned `voxgate`.
 - `/v1/audio/transcriptions` returned JSON text for MP3 input.
 - `stream=true` returned SSE `transcript.text.delta` events.
 - The OpenAI Python SDK smoke client returned text.
@@ -113,7 +113,7 @@ Long-file validation from 71 concatenated AISHELL utterances:
 
 ## OpenAI SDK Probe
 
-Both SDK clients were run against local `ime-asr serve` with bearer auth:
+Both SDK clients were run against local `voxgate serve` with bearer auth:
 
 ```bash
 python3 tests/e2e/openai_python_client.py \

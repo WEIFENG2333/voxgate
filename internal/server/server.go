@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/WEIFENG2333/ime-asr/internal/asr"
-	"github.com/WEIFENG2333/ime-asr/internal/audio"
-	"github.com/WEIFENG2333/ime-asr/internal/output"
-	"github.com/WEIFENG2333/ime-asr/internal/transcriber"
+	"github.com/WEIFENG2333/voxgate/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/audio"
+	"github.com/WEIFENG2333/voxgate/internal/output"
+	"github.com/WEIFENG2333/voxgate/internal/transcriber"
 )
 
 type Config struct {
@@ -43,6 +43,11 @@ func New(cfg Config) *Server {
 	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 60 * time.Second
+	}
+	if !cfg.EnablePunctuation && !cfg.EnableThreePass && !cfg.EnableTwoPass {
+		cfg.EnablePunctuation = true
+		cfg.EnableThreePass = true
+		cfg.EnableTwoPass = true
 	}
 	return &Server{Config: cfg, sem: make(chan struct{}, cfg.MaxConcurrency)}
 }
@@ -74,7 +79,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = fmt.Fprintln(w, "ime_asr_up 1")
+	_, _ = fmt.Fprintln(w, "voxgate_up 1")
 }
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +89,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []map[string]string{{"id": "ime-asr", "object": "model"}}})
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []map[string]string{{"id": "voxgate", "object": "model"}}})
 }
 
 func (s *Server) translations(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +99,7 @@ func (s *Server) translations(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r) {
 		return
 	}
-	writeOpenAIError(w, http.StatusBadRequest, "unsupported_request_error", "Doubao IME ASR does not support translation to English", "unsupported")
+	writeOpenAIError(w, http.StatusBadRequest, "unsupported_request_error", "translation to English is not supported by this backend", "unsupported")
 }
 
 func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +170,8 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	opts.EnableThreePass = s.Config.EnableThreePass
 	opts.EnableTwoPass = s.Config.EnableTwoPass
 	opts.RequestTimeout = s.Config.RequestTimeout
+	opts.Language = formValue(r.MultipartForm, "language", opts.Language)
+	opts.Prompt = formValue(r.MultipartForm, "prompt", "")
 	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: s.Config.CredentialPath, UserAgent: s.Config.UserAgent, WebSocketURL: s.Config.WebSocketURL}}
 	if stream {
 		events, err := runner.Stream(ctx, src, opts)
@@ -192,10 +199,10 @@ func (s *Server) streamSSE(w http.ResponseWriter, events <-chan asr.Event) {
 	flusher, _ := w.(http.Flusher)
 	for ev := range events {
 		if ev.Type == asr.EventTranscriptDelta {
-			writeSSE(w, "transcript.text.delta", map[string]string{"delta": ev.Text})
+			writeSSE(w, "transcript.text.delta", map[string]string{"type": "transcript.text.delta", "delta": ev.Text})
 		}
 		if ev.Type == asr.EventTranscriptDone {
-			writeSSE(w, "transcript.text.done", map[string]string{"text": ev.Text})
+			writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": ev.Text})
 		}
 		if ev.Type == asr.EventError && ev.Error != nil {
 			writeSSE(w, "error", ev.Error)
@@ -237,7 +244,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 }
 
 func writeTemp(file multipart.File, header *multipart.FileHeader) (string, error) {
-	tmp, err := os.CreateTemp("", "ime-asr-*-"+header.Filename)
+	tmp, err := os.CreateTemp("", "voxgate-*-"+header.Filename)
 	if err != nil {
 		return "", err
 	}

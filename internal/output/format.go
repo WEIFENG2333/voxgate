@@ -93,6 +93,14 @@ func writeCues(w io.Writer, result asr.Result, vtt bool) error {
 		segments = []asr.Segment{{Index: 0, Text: result.Text, Start: 0, End: result.Duration}}
 	}
 	for i, seg := range segments {
+		if seg.End <= seg.Start {
+			if len(segments) == 1 && result.Duration > 0 {
+				seg.Start = 0
+				seg.End = result.Duration
+			} else if seg.End < seg.Start {
+				seg.End = seg.Start
+			}
+		}
 		if !vtt {
 			if _, err := fmt.Fprintf(w, "%d\n", i+1); err != nil {
 				return err

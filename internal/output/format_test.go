@@ -58,3 +58,18 @@ func TestSubtitleFallbackUsesDuration(t *testing.T) {
 		t.Fatalf("bad srt fallback: %q", b.String())
 	}
 }
+
+func TestSubtitleSingleZeroLengthSegmentUsesDuration(t *testing.T) {
+	var b bytes.Buffer
+	err := WriteResult(&b, SRT, asr.Result{
+		Text:     "hello",
+		Duration: 3.5,
+		Segments: []asr.Segment{{Index: 0, Text: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "00:00:00,000 --> 00:00:03,500") {
+		t.Fatalf("bad srt segment fallback: %q", b.String())
+	}
+}

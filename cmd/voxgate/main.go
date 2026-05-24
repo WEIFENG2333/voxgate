@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -132,10 +133,10 @@ func transcribe(args []string, cfg config.Config) int {
 	disableThreePass := fs.Bool("disable-three-pass", false, "disable third pass")
 	outPath := fs.String("output", "", "write output to file")
 	fs.StringVar(outPath, "o", "", "write output to file")
-	inputFormat := fs.String("input-format", "wav", "stdin format: pcm16|wav|raw")
+	inputFormat := fs.String("input-format", "wav", "stdin format: pcm16|wav|raw; pcm16/raw + --stream is live")
 	sampleRate := fs.Int("sample-rate", audio.SampleRate, "raw PCM sample rate")
-	requestTimeout := fs.Duration("request-timeout", 60*time.Second, "request timeout")
-	realtime := fs.Bool("realtime", false, "send audio at realtime speed")
+	requestTimeout := fs.Duration("request-timeout", config.DefaultServerRequestTimeout, "request timeout")
+	realtime := fs.Bool("realtime", false, "pace file input at realtime speed")
 	noChunk := fs.Bool("no-chunk", false, "disable long-file chunking")
 	chunkDuration := fs.Duration("chunk-duration", transcriber.DefaultChunkDuration, "long-file chunk duration")
 	if err := fs.Parse(reorderTranscribeArgs(args)); err != nil {
@@ -173,11 +174,6 @@ func transcribe(args []string, cfg config.Config) int {
 		w = f
 	}
 	ctx := context.Background()
-	src, err := audio.Open(ctx, fs.Arg(0), *inputFormat, *sampleRate)
-	if err != nil {
-		printErr("audio_error", err)
-		return 5
-	}
 	opts := asr.DefaultOptions()
 	opts.Language = *language
 	opts.Prompt = *prompt
@@ -185,28 +181,21 @@ func transcribe(args []string, cfg config.Config) int {
 	opts.EnableThreePass = cfg.ASR.EnableThreePass && !*disableThreePass
 	opts.EnableTwoPass = cfg.ASR.EnableTwoPass
 	opts.RequestTimeout = *requestTimeout
-	opts.Realtime = *realtime
 	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: cfg.CredentialPath, UserAgent: cfg.ASR.UserAgent, ChunkDuration: *chunkDuration}}
+	liveInput := isLiveStdinStream(fs.Arg(0), *inputFormat, *stream)
+	opts.Realtime = *realtime && !liveInput
 	if *stream {
-		events, err := runner.StreamWithChunking(ctx, src, opts, !*noChunk)
+		events, err := streamEvents(ctx, runner, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
 		if err != nil {
-			printErr("asr_error", err)
-			return 1
+			printErr(streamErrorCode(err), err)
+			return streamErrorExitCode(err)
 		}
-		for ev := range events {
-			if ev.Type == asr.EventError && ev.Error != nil {
-				printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
-				return 1
-			}
-			_ = output.WriteEvent(w, chosen, ev)
-			if chosen == output.Text && ev.Type == asr.EventTranscriptDelta {
-				_, _ = fmt.Fprint(w, "\r")
-			}
-		}
-		if chosen == output.Text {
-			_, _ = fmt.Fprintln(w)
-		}
-		return 0
+		return writeStreamEvents(w, chosen, events)
+	}
+	src, err := audio.Open(ctx, fs.Arg(0), *inputFormat, *sampleRate)
+	if err != nil {
+		printErr("audio_error", err)
+		return 5
 	}
 	result, err := runner.Transcribe(ctx, src, opts, !*noChunk)
 	if err != nil {
@@ -218,6 +207,81 @@ func transcribe(args []string, cfg config.Config) int {
 		return 1
 	}
 	return 0
+}
+
+var errLiveStdinSampleRate = fmt.Errorf("live stdin pcm16 requires %d Hz mono PCM; pipe ffmpeg/arecord output at 16000 Hz or omit --sample-rate", audio.SampleRate)
+
+func isLiveStdinStream(path, inputFormat string, stream bool) bool {
+	return stream && path == "-" && (inputFormat == "pcm16" || inputFormat == "raw")
+}
+
+func streamEvents(ctx context.Context, runner transcriber.Runner, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {
+	if liveInput {
+		if sampleRate != 0 && sampleRate != audio.SampleRate {
+			return nil, errLiveStdinSampleRate
+		}
+		src := audio.NewLiveSource()
+		go copyStdinPCM(src)
+		return runner.StreamFrames(ctx, src, opts)
+	}
+	src, err := audio.Open(ctx, path, inputFormat, sampleRate)
+	if err != nil {
+		return nil, err
+	}
+	return runner.StreamWithChunking(ctx, src, opts, allowChunking)
+}
+
+func copyStdinPCM(src *audio.LiveSource) {
+	defer src.CloseWrite()
+	buf := make([]byte, audio.BytesPerFrame*10)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n > 0 {
+			if writeErr := src.WritePCM(buf[:n]); writeErr != nil {
+				return
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func writeStreamEvents(w io.Writer, format string, events <-chan asr.Event) int {
+	for ev := range events {
+		if ev.Type == asr.EventError && ev.Error != nil {
+			printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
+			return 1
+		}
+		_ = output.WriteEvent(w, format, ev)
+		if format == output.Text && ev.Type == asr.EventTranscriptDelta {
+			_, _ = fmt.Fprint(w, "\r")
+		}
+	}
+	if format == output.Text {
+		_, _ = fmt.Fprintln(w)
+	}
+	return 0
+}
+
+func streamErrorCode(err error) string {
+	if errors.Is(err, errLiveStdinSampleRate) {
+		return "audio_error"
+	}
+	if strings.HasPrefix(err.Error(), "unsupported stdin input format") {
+		return "audio_error"
+	}
+	return "asr_error"
+}
+
+func streamErrorExitCode(err error) int {
+	if streamErrorCode(err) == "audio_error" {
+		return 5
+	}
+	return 1
 }
 
 func reorderTranscribeArgs(args []string) []string {

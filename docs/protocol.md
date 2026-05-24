@@ -99,7 +99,8 @@ Response fields:
 | 5 | int32 | status_code |
 | 6 | string | status_message |
 | 7 | string | result_json |
-| 9 | int32 | unknown |
+| 9 | int32 | response phase marker observed as `0` for start/finish control responses, `3` for interim recognition results, and `9` for final recognition result |
+| 11 | bytes | opaque backend metadata, observed as a 53-byte field on real responses; currently preserved for diagnostics only |
 
 Frame states:
 

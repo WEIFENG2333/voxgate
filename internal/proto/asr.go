@@ -32,6 +32,7 @@ type Response struct {
 	StatusMessage string
 	ResultJSON    string
 	Unknown9      int32
+	Unknown11     []byte
 }
 
 func MarshalRequest(req Request) []byte {
@@ -81,7 +82,8 @@ func UnmarshalResponse(data []byte) (Response, error) {
 			if end < off || end > len(data) {
 				return resp, errors.New("protobuf: truncated length-delimited field")
 			}
-			s := string(data[off:end])
+			raw := data[off:end]
+			s := string(raw)
 			off = end
 			switch field {
 			case 1:
@@ -96,6 +98,8 @@ func UnmarshalResponse(data []byte) (Response, error) {
 				resp.StatusMessage = s
 			case 7:
 				resp.ResultJSON = s
+			case 11:
+				resp.Unknown11 = append(resp.Unknown11[:0], raw...)
 			}
 		case 1:
 			if off+8 > len(data) {

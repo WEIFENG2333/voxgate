@@ -49,6 +49,14 @@ jobs:
       - name: Check formatting
         if: runner.os == 'Linux'
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Check shell scripts
+        if: runner.os == 'Linux'
+        run: sh -n scripts/install.sh
+      - name: Check PowerShell scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content scripts/install.ps1 -Raw), [ref]$null)
       - name: Vet
         run: go vet ./...
       - name: Test

@@ -2,8 +2,10 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -44,6 +46,28 @@ func TestTranscriptionsJSONWithMockWebSocket(t *testing.T) {
 	}
 }
 
+func TestTranscriptionsIgnoresModelValue(t *testing.T) {
+	wsURL, closeWS := mockASRServer(t, "模型名被忽略")
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
+
+	body, contentType := multipartBody(t, "test.wav", minimalWAV(), field{"model", "whisper-1"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "模型名被忽略") {
+		t.Fatalf("bad body: %s", rec.Body.String())
+	}
+}
+
 func TestTranscriptionsSSEWithMockWebSocket(t *testing.T) {
 	wsURL, closeWS := mockASRServer(t, "流式文本")
 	defer closeWS()
@@ -64,6 +88,110 @@ func TestTranscriptionsSSEWithMockWebSocket(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "transcript.text.done") || !strings.Contains(rec.Body.String(), "流式文本") {
 		t.Fatalf("bad sse: %s", rec.Body.String())
 	}
+}
+
+func TestRealtimeTranscriptionWebSocketWithMockBackend(t *testing.T) {
+	wsURL, closeWS := mockASRServer(t, "实时文本")
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http")+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	var msg map[string]any
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["type"] != "session.created" {
+		t.Fatalf("first event = %v", msg)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "session.update", "session": map[string]any{"type": "transcription"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["type"] != "session.updated" {
+		t.Fatalf("session update event = %v", msg)
+	}
+	pcm := minimalPCM()
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["type"] != "input_audio_buffer.committed" {
+		t.Fatalf("commit event = %v", msg)
+	}
+	for {
+		if err := conn.ReadJSON(&msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg["type"] == "conversation.item.input_audio_transcription.completed" {
+			if msg["transcript"] != "实时文本" {
+				t.Fatalf("bad completed event: %v", msg)
+			}
+			return
+		}
+		if msg["type"] == "conversation.item.input_audio_transcription.failed" || msg["type"] == "error" {
+			t.Fatalf("unexpected realtime error: %v", msg)
+		}
+	}
+}
+
+func TestRealtimeTranscriptionStreamsBeforeCommit(t *testing.T) {
+	wsURL, closeWS := mockASRStreamingServer(t)
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http")+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var msg map[string]any
+	_ = conn.ReadJSON(&msg)
+	pcm := minimalPCM()
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			var netErr interface{ Timeout() bool }
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+			t.Fatal(err)
+		}
+		if msg["type"] == "conversation.item.input_audio_transcription.delta" {
+			return
+		}
+	}
+	t.Fatal("did not receive transcription delta before commit")
 }
 
 func TestTranscriptionsRejectsUnsupportedFormatBeforeASR(t *testing.T) {
@@ -136,6 +264,36 @@ func mockASRServer(t *testing.T, finalText string) (string, func()) {
 	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close
 }
 
+func mockASRStreamingServer(t *testing.T) (string, func()) {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			req, _ := parseRequestMethod(data)
+			if req == "TaskRequest" {
+				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": "早期增量", "is_interim": true}}})
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
+				return
+			}
+		}
+	}))
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close
+}
+
 func parseRequestMethod(data []byte) (string, error) {
 	// Minimal decoder for request field 5 used only by this test.
 	for i := 0; i < len(data)-1; i++ {
@@ -162,7 +320,16 @@ func multipartBody(t *testing.T, filename string, file []byte, fields ...field) 
 	if _, err := part.Write(file); err != nil {
 		t.Fatal(err)
 	}
-	_ = w.WriteField("model", "voxgate")
+	hasModel := false
+	for _, f := range fields {
+		if f.key == "model" {
+			hasModel = true
+			break
+		}
+	}
+	if !hasModel {
+		_ = w.WriteField("model", "voxgate")
+	}
 	for _, f := range fields {
 		_ = w.WriteField(f.key, f.value)
 	}
@@ -191,4 +358,9 @@ func minimalWAV() []byte {
 	_ = binary.Write(&b, binary.LittleEndian, uint32(dataSize))
 	b.Write(make([]byte, dataSize))
 	return b.Bytes()
+}
+
+func minimalPCM() []byte {
+	const samples = 1600
+	return make([]byte, samples*2)
 }

@@ -76,7 +76,17 @@ func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource
 		return err
 	}
 	creds, refreshErr := manager.Ensure(ctx, true)
-	if refreshErr != nil {
+	if refreshErr == nil {
+		retryable, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+		if err == nil {
+			return nil
+		}
+		if !retryable {
+			return err
+		}
+	}
+	creds, reissueErr := manager.Reissue(ctx)
+	if reissueErr != nil {
 		return err
 	}
 	_, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
@@ -258,21 +268,21 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			continue
 		}
 		if parsed.Kind == ParsedVADStart {
-			events <- Event{Type: EventVADStart, RequestID: requestID, TimestampMS: int64(time.Since(start) / time.Millisecond), Raw: parsed.Raw}
+			events <- Event{Type: EventVADStart, RequestID: requestID, TimestampMS: int64(time.Since(start) / time.Millisecond), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			continue
 		}
 		full, reset, seg := agg.Update(parsed.Text)
 		if reset {
-			events <- Event{Type: EventTranscriptSegment, RequestID: requestID, Text: seg.Text, SegmentIndex: seg.Index, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptSegment, RequestID: requestID, Text: seg.Text, SegmentIndex: seg.Index, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		}
 		switch parsed.Kind {
 		case ParsedInterim:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, IsInterim: true, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, IsInterim: true, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedDefinite:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedFinal:
 			text := agg.Final(parsed.Text)
-			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: duration.Seconds(), Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: duration.Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			return nil
 		}
 	}

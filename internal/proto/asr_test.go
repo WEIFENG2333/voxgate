@@ -21,12 +21,15 @@ func TestMarshalRequestFieldNumbers(t *testing.T) {
 }
 
 func TestUnmarshalResponse(t *testing.T) {
-	data := MarshalResponse(Response{RequestID: "rid", MessageType: "SessionFinished", StatusCode: 200, StatusMessage: "OK", ResultJSON: `{"results":[]}`})
+	data := append(MarshalResponse(Response{RequestID: "rid", MessageType: "SessionFinished", StatusCode: 200, StatusMessage: "OK", ResultJSON: `{"results":[]}`}), 0x5a, 0x03, 'x', 'y', 'z')
 	resp, err := UnmarshalResponse(data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.RequestID != "rid" || resp.MessageType != "SessionFinished" || resp.StatusCode != 200 || resp.ResultJSON == "" {
 		t.Fatalf("bad response: %+v", resp)
+	}
+	if string(resp.Unknown11) != "xyz" {
+		t.Fatalf("bad unknown field 11: %q", resp.Unknown11)
 	}
 }

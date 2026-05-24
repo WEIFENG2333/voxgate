@@ -1,25 +1,94 @@
 # voxgate
 
-`voxgate` is a research CLI and local HTTP server for Chinese speech transcription. It wraps a non-public input-method ASR WebSocket backend and exposes an OpenAI-compatible `/v1/audio/transcriptions` API.
+`voxgate` is a Chinese speech-to-text CLI and local HTTP server. It transcribes local audio/video files and can expose an OpenAI-compatible `/v1/audio/transcriptions` endpoint for existing SDK clients.
 
-中文：`voxgate` 是一个中文语音转文字工具，支持命令行转写本地文件，也可以启动本地 OpenAI 兼容 HTTP 服务。
+中文：`voxgate` 是一个中文语音转文字工具，可以直接转写本地音频/视频，也可以启动一个本地 OpenAI 兼容接口。
 
-## Important Notice
+## Notice
 
-This project uses a non-public input-method ASR API without official authorization. It is for learning and research only, must not be used commercially, and may stop working at any time.
+This project wraps a non-public input-method ASR backend. It is for learning and research only, must not be used commercially, and may stop working if the upstream service changes or rejects requests.
 
-本项目使用非公开输入法 ASR 接口，没有官方授权。仅供学习研究，不得商用；接口可能随时变更、封禁或失效。
+本项目使用非公开输入法 ASR 后端，仅供学习研究，不得商用；上游服务可能随时变更、封禁或失效。
 
 ## Install
 
-Requirements:
+### Linux/macOS one-line install
 
-- Go 1.22+
-- `ffmpeg`
-- `libopus` development package
-- CGO enabled
+Install the latest GitHub Release binary:
 
-Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/WEIFENG2333/voxgate/main/scripts/install.sh | sh
+```
+
+By default this installs to `~/.local/bin`. To choose another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WEIFENG2333/voxgate/main/scripts/install.sh | VOXGATE_INSTALL_DIR=/usr/local/bin sh
+```
+
+### Windows PowerShell install
+
+Install `ffmpeg` first:
+
+```powershell
+winget install Gyan.FFmpeg
+```
+
+Then install `voxgate` from the latest GitHub Release:
+
+```powershell
+irm https://raw.githubusercontent.com/WEIFENG2333/voxgate/main/scripts/install.ps1 | iex
+```
+
+The default install directory is:
+
+```text
+%LOCALAPPDATA%\Programs\voxgate
+```
+
+If `voxgate` is not found after install, add it to the current PowerShell session:
+
+```powershell
+$env:Path = "$env:LOCALAPPDATA\Programs\voxgate;$env:Path"
+```
+
+Persist it for future terminals:
+
+```powershell
+[Environment]::SetEnvironmentVariable("Path", "$env:LOCALAPPDATA\Programs\voxgate;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+```
+
+Or install to a directory already on PATH:
+
+```powershell
+$env:VOXGATE_INSTALL_DIR = "$env:USERPROFILE\bin"
+irm https://raw.githubusercontent.com/WEIFENG2333/voxgate/main/scripts/install.ps1 | iex
+```
+
+Manual Windows install:
+
+1. Download `voxgate_windows_amd64.zip` from GitHub Releases.
+2. Extract it to a folder, for example `%LOCALAPPDATA%\Programs\voxgate`.
+3. Keep `voxgate.exe` and the bundled `.dll` files in the same folder.
+4. Add that folder to PATH.
+
+Runtime dependencies:
+
+| Platform | Command |
+|---|---|
+| Ubuntu/Debian | `sudo apt-get install -y ffmpeg libopus0` |
+| macOS | `brew install ffmpeg opus` |
+| Windows | `winget install Gyan.FFmpeg`; release zip includes `voxgate.exe` and libopus DLLs |
+
+Run a health check:
+
+```bash
+voxgate doctor
+```
+
+### Install from source
+
+Use this when you want the latest source or need to build for your own system:
 
 ```bash
 sudo apt-get install -y ffmpeg libopus-dev pkg-config
@@ -33,167 +102,78 @@ brew install ffmpeg opus pkg-config
 go install github.com/WEIFENG2333/voxgate/cmd/voxgate@latest
 ```
 
-Windows:
+Windows source builds require `ffmpeg`, `pkg-config`, a C compiler, and `libopus` through MSYS2 or vcpkg. Most Windows users should prefer the release zip or PowerShell installer.
 
-Install `ffmpeg`, `pkg-config`, a C compiler, and `libopus` through MSYS2 or vcpkg, then build with `CGO_ENABLED=1`.
+Requirements for source builds:
+
+- Go 1.22+
+- `ffmpeg`
+- `libopus` development package
+- CGO enabled
 
 ## Quick Start
 
-Transcribe a file:
+Transcribe an audio or video file:
 
 ```bash
 voxgate transcribe speech.wav
+voxgate transcribe video.mp4
 ```
 
-Return OpenAI-style JSON:
+Write OpenAI-style JSON:
 
 ```bash
-voxgate transcribe speech.mp3 --format json
+voxgate transcribe meeting.mp3 --format json -o meeting.json
 ```
 
-Generate coarse subtitles:
+Generate coarse subtitle files:
 
 ```bash
-voxgate transcribe speech.m4a --format srt -o speech.srt
-voxgate transcribe speech.mp4 --format vtt -o speech.vtt
-```
-
-Stream events as NDJSON:
-
-```bash
-voxgate transcribe speech.wav --stream
-```
-
-Start the OpenAI-compatible local server:
-
-```bash
-voxgate serve --host 127.0.0.1 --port 8080 --auth-token local-token
-```
-
-## CLI
-
-Commands:
-
-```bash
-voxgate transcribe <file|->
-voxgate serve
-voxgate doctor
-voxgate auth
-voxgate version
-```
-
-Common `transcribe` options:
-
-| Option | Description |
-|---|---|
-| `--format text|json|verbose_json|srt|vtt|ndjson` | output format |
-| `--stream` | stream incremental output |
-| `--output <file>` / `-o <file>` | write to file |
-| `--input-format wav|pcm16|raw` | stdin input format |
-| `--sample-rate <hz>` | raw PCM sample rate |
-| `--request-timeout <duration>` | per-session timeout |
-
-Advanced options:
-
-| Option | Description |
-|---|---|
-| `--language <code>` / `-l <code>` | accepted for OpenAI compatibility; backend effectively ignores it |
-| `--prompt <text>` | accepted for compatibility; not sent to the backend |
-| `--no-punctuation` | disable punctuation |
-| `--disable-three-pass` | disable the third recognition pass |
-| `--realtime` | send audio at 20 ms pacing |
-| `--no-chunk` | disable long-file chunking for protocol probing |
-| `--chunk-duration <duration>` | default `300s` |
-
-Default output format:
-
-| Situation | Default |
-|---|---|
-| stdout is a terminal | `text` |
-| stdout is piped or redirected | `json` |
-| `--stream` is set | `ndjson` |
-
-Examples:
-
-```bash
-voxgate transcribe speech.wav
-voxgate transcribe speech.mp3 --format json
-voxgate transcribe speech.m4a --format verbose_json
-voxgate transcribe speech.flac --format srt -o speech.srt
-voxgate transcribe speech.mp4 --format vtt -o speech.vtt
-cat speech.wav | voxgate transcribe - --input-format wav --stream
-voxgate transcribe raw.pcm --input-format raw --sample-rate 16000 --format json
-```
-
-More command examples:
-
-```bash
-# transcribe: human-readable default on a terminal
-voxgate transcribe meeting.wav
-
-# transcribe: script-friendly OpenAI JSON
-voxgate transcribe meeting.mp3 --format json > meeting.json
-
-# transcribe: streaming NDJSON for agents
-voxgate transcribe meeting.wav --stream --format ndjson
-
-# transcribe: subtitle files with coarse timing
 voxgate transcribe lecture.mp4 --format srt -o lecture.srt
 voxgate transcribe lecture.mp4 --format vtt -o lecture.vtt
-
-# serve: local OpenAI-compatible API
-voxgate serve
-
-# serve: protected local API for SDK clients
-voxgate serve --host 127.0.0.1 --port 8080 --auth-token local-token
-
-# serve: higher concurrency and longer request timeout
-voxgate serve --max-concurrency 8 --request-timeout 10m
-
-# auth/doctor/version
-voxgate auth
-voxgate doctor
-voxgate version
 ```
 
-## Long Audio Strategy
-
-The backend is optimized for IME-style speech, not arbitrary long batch transcription in one WebSocket session.
-
-Current policy:
-
-| Input length | Behavior |
-|---|---|
-| `<= 300s` | one WebSocket session |
-| `> 300s` | split into serial 300-second chunks, one WebSocket session per chunk |
-
-Chunking is time based after ffmpeg converts audio to `16kHz mono PCM`. Boundaries are aligned to 20 ms Opus frames. The chunker is not silence-aware yet and does not add overlap.
-
-SRT/VTT timestamps are coarse. For chunked long files, cue ranges are chunk offsets in the original file timeline, not word-level or sentence-level ASR timestamps.
-
-## Server
-
-Start:
+Stream incremental events as NDJSON:
 
 ```bash
-voxgate serve --host 127.0.0.1 --port 8080
-voxgate serve --auth-token local-token
-voxgate serve --max-concurrency 8 --request-timeout 10m
+voxgate transcribe speech.wav --stream --format ndjson
 ```
 
-Implemented endpoints:
+Stream live PCM from another program:
 
-| Path | Method | Notes |
-|---|---|---|
-| `/v1/audio/transcriptions` | POST multipart | OpenAI-compatible transcription |
-| `/v1/audio/translations` | POST | returns 400; translation is unsupported |
-| `/v1/models` | GET | returns `voxgate` |
-| `/health` | GET | health check |
-| `/metrics` | GET | minimal Prometheus text |
+```bash
+# Linux ALSA microphone
+arecord -f S16_LE -r 16000 -c 1 | voxgate transcribe - --input-format pcm16 --stream
 
-`/v1/realtime` is reserved for future work and currently returns an error.
+# Any file or capture command through ffmpeg, output as 16 kHz mono PCM16
+ffmpeg -re -i speech.wav -ac 1 -ar 16000 -f s16le - | voxgate transcribe - --input-format pcm16 --stream
+```
 
-Python OpenAI SDK:
+Common capture commands:
+
+```bash
+# macOS: list devices, then replace ":0" with the microphone index you want
+ffmpeg -f avfoundation -list_devices true -i ""
+ffmpeg -f avfoundation -i ":0" -ac 1 -ar 16000 -f s16le - | voxgate transcribe - --input-format pcm16 --stream
+```
+
+```powershell
+# Windows: list DirectShow devices, then replace audio="Microphone (...)"
+ffmpeg -list_devices true -f dshow -i dummy
+ffmpeg -f dshow -i audio="Microphone (Realtek Audio)" -ac 1 -ar 16000 -f s16le - | voxgate transcribe - --input-format pcm16 --stream
+```
+
+For stdin, `pcm16`/`raw` with `--stream` is sent to the ASR service as it arrives. `wav` stdin is still read to EOF first because container decoding needs `ffmpeg`.
+
+## Local OpenAI-Compatible Server
+
+Start the server:
+
+```bash
+voxgate serve --host 127.0.0.1 --port 8080 --auth-token local-token
+```
+
+Use it with the OpenAI Python SDK:
 
 ```python
 from openai import OpenAI
@@ -210,46 +190,104 @@ with open("speech.wav", "rb") as f:
 print(result.text)
 ```
 
-SSE streaming:
+Useful endpoints:
+
+| Path | Method | Notes |
+|---|---|---|
+| `/v1/audio/transcriptions` | POST multipart | OpenAI-compatible transcription |
+| `/v1/audio/translations` | POST | returns 400; translation is unsupported |
+| `/v1/models` | GET | returns `voxgate` |
+| `/v1/realtime` | WebSocket | OpenAI Realtime-style transcription subset; disabled unless `--enable-realtime` is set |
+| `/health` | GET | health check |
+| `/metrics` | GET | minimal Prometheus text |
+
+## Realtime Transcription
+
+`voxgate` can expose an OpenAI Realtime-style WebSocket transcription endpoint:
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/audio/transcriptions \
-  -H 'Authorization: Bearer local-token' \
-  -F model=voxgate \
-  -F stream=true \
-  -F file=@speech.wav
+voxgate serve --auth-token local-token --enable-realtime
 ```
 
-For HTTP file uploads, the client uploads the multipart body first. The local server then decodes the file and streams transcription events back as SSE. This is output streaming, not bidirectional upload streaming.
+Connect to:
 
-## OpenAI Compatibility
+```text
+ws://127.0.0.1:8080/v1/realtime
+```
 
-| OpenAI field | Behavior |
+Supported client events:
+
+| Event | Notes |
 |---|---|
-| `file` | supported |
-| `model` | accepted, ignored |
-| `response_format` | `json`, `text`, `srt`, `vtt`, `verbose_json` |
-| `stream=true` | SSE events `transcript.text.delta` and `transcript.text.done` |
-| `language` | accepted, backend effectively ignores it |
-| `prompt` | accepted, not sent to backend |
-| `temperature` | ignored |
-| translations | unsupported |
+| `session.update` | accepted; returns `session.updated` |
+| `input_audio_buffer.append` | append base64-encoded PCM16 audio |
+| `input_audio_buffer.commit` | transcribe the current buffer |
+| `input_audio_buffer.clear` | clear buffered audio |
 
-Errors use OpenAI-style JSON:
+The current compatibility subset expects 16 kHz mono PCM16 input. It does not implement automatic server VAD yet, so clients should send `input_audio_buffer.commit` when they want transcription to start.
+
+Realtime result events use OpenAI-style names:
 
 ```json
-{"error":{"message":"...","type":"invalid_request_error","code":"..."}}
+{"type":"conversation.item.input_audio_transcription.delta","delta":"..."}
+{"type":"conversation.item.input_audio_transcription.completed","transcript":"..."}
 ```
+
+## CLI Reference
+
+Commands:
+
+```bash
+voxgate transcribe <file|->
+voxgate serve
+voxgate doctor
+voxgate auth
+voxgate version
+```
+
+Common `transcribe` options:
+
+| Option | Description |
+|---|---|
+| `--format text|json|verbose_json|srt|vtt|ndjson` | output format |
+| `--output <file>` / `-o <file>` | write output to file |
+| `--stream` | stream incremental output |
+| `--input-format wav|pcm16|raw` | stdin input format |
+| `--sample-rate <hz>` | raw PCM sample rate |
+| `--request-timeout <duration>` | per-session timeout |
+| `--chunk-duration <duration>` | long-file chunk size, default `300s` |
+| `--no-punctuation` | disable punctuation |
+| `--disable-three-pass` | disable the third recognition pass |
+| `--realtime` | send audio at 20 ms pacing |
+
+Default output format:
+
+| Situation | Default |
+|---|---|
+| stdout is a terminal | `text` |
+| stdout is piped or redirected | `json` |
+| `--stream` is set | `ndjson` |
+
+## Long Audio
+
+The upstream backend behaves like an input-method ASR service, not a dedicated long-form batch transcription API. `voxgate` therefore splits long files automatically.
+
+| Input length | Behavior |
+|---|---|
+| `<= 300s` | one WebSocket session |
+| `> 300s` | serial 300-second chunks |
+
+SRT/VTT timestamps are coarse chunk/segment ranges, not precise word-level subtitle timing.
 
 ## Configuration
 
-Priority:
+Config priority:
 
 ```text
 flags > environment variables > YAML config > defaults
 ```
 
-Example:
+Example config:
 
 ```yaml
 credential_path: ~/.config/voxgate/credentials.json
@@ -265,26 +303,48 @@ server:
   request_timeout: 10m
 ```
 
-Environment variables use the `VOXGATE_*` prefix.
+Environment variables use the `VOXGATE_*` prefix, for example `VOXGATE_CREDENTIAL_PATH` and `VOXGATE_SERVER_AUTH_TOKEN`.
 
 ## Development
 
 ```bash
 make build
 make test
-make test-e2e
-make probe
+make vet
 make doctor
 ```
 
-CI runs on Linux, macOS Intel, macOS Apple Silicon, and Windows. It checks formatting, runs `go vet`, runs unit/integration tests, runs Linux race tests, and builds the CLI.
+Release maintainer checks:
 
-Real endpoint probes are under `tests/e2e/` and require network access plus a still-working backend.
+```bash
+make release-check
+make release-snapshot
+```
+
+These targets require GoReleaser locally. Normal development does not.
+
+Real endpoint probes are under `tests/e2e/` and require network access plus a working upstream backend.
+
+## Distribution
+
+Recommended user-facing distribution:
+
+1. Tag a release: `git tag v0.2.7 && git push origin v0.2.7`
+2. GitHub Actions builds native Linux, macOS, and Windows archives.
+3. Users install with `scripts/install.sh` or download the archive from GitHub Releases.
+
+`pip` is not a good primary channel for this project because `voxgate` is a Go CLI with CGO and runtime system dependencies (`ffmpeg`, `libopus`). `go install` remains useful for developers, while GitHub Releases are the cleanest path for normal users.
+
+## More Docs
+
+- [Protocol notes](docs/protocol.md)
+- [Client strategy](docs/strategy.md)
+- [Validation report](docs/validation.md)
 
 ## Known Limits
 
 - The backend is non-public and unstable.
 - Long-file chunking is serial, not parallel.
-- SRT/VTT timing is coarse and not suitable for precise subtitle alignment yet.
-- `/v1/realtime` is not implemented.
-- Cross-platform release uses native CGO builds because `libopus` is a system dependency.
+- Subtitle timing is coarse.
+- `/v1/realtime` implements a transcription-focused subset, not the full OpenAI Realtime API.
+- Release binaries still require system `ffmpeg`; Linux/macOS also need system `libopus`.

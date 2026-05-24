@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/WEIFENG2333/voxgate/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/transcriber"
+)
 
 func TestParseGlobalAcceptsFlagsAfterSubcommand(t *testing.T) {
 	g, rest, err := parseGlobal([]string{"doctor", "--credential-path", "custom.json", "--quiet", "--json-logs"})
@@ -54,5 +61,36 @@ func TestTranscribeRejectsInvalidFormatBeforeOpeningAudio(t *testing.T) {
 func TestTranscribeRejectsSubtitleStreamingFormat(t *testing.T) {
 	if got := run([]string{"transcribe", "--stream", "--format", "srt", "missing.wav"}); got != 2 {
 		t.Fatalf("invalid stream format exit = %d, want 2", got)
+	}
+}
+
+func TestIsLiveStdinStream(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		inputFormat string
+		stream      bool
+		want        bool
+	}{
+		{name: "pcm16 stdin stream", path: "-", inputFormat: "pcm16", stream: true, want: true},
+		{name: "raw stdin stream", path: "-", inputFormat: "raw", stream: true, want: true},
+		{name: "wav stdin is buffered", path: "-", inputFormat: "wav", stream: true, want: false},
+		{name: "file is buffered", path: "speech.wav", inputFormat: "pcm16", stream: true, want: false},
+		{name: "non stream is buffered", path: "-", inputFormat: "pcm16", stream: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLiveStdinStream(tt.path, tt.inputFormat, tt.stream)
+			if got != tt.want {
+				t.Fatalf("isLiveStdinStream() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStreamEventsRejectsLiveStdinSampleRate(t *testing.T) {
+	_, err := streamEvents(context.Background(), transcriber.Runner{}, "-", "pcm16", 8000, asr.Options{}, true, true)
+	if !errors.Is(err, errLiveStdinSampleRate) {
+		t.Fatalf("streamEvents error = %v, want errLiveStdinSampleRate", err)
 	}
 }

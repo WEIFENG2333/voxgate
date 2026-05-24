@@ -81,6 +81,7 @@ jobs:
           mkdir -p dist/${{ matrix.asset }}
           if [ "${{ runner.os }}" = "Windows" ]; then
             go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/voxgate.exe ./cmd/voxgate
+            cp C:/vcpkg/installed/x64-mingw-dynamic/bin/*.dll dist/${{ matrix.asset }}/ 2>/dev/null || true
           else
             go build -trimpath -ldflags "-s -w" -o dist/${{ matrix.asset }}/voxgate ./cmd/voxgate
           fi

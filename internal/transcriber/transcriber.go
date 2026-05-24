@@ -40,14 +40,14 @@ func (r Runner) Transcribe(ctx context.Context, src *audio.Source, opts asr.Opti
 	if allowChunking && src.Duration() > r.threshold() {
 		return r.transcribeChunks(ctx, client, src.Chunks(r.chunkDuration()), opts)
 	}
-	events, err := r.Stream(ctx, src, opts)
-	if err != nil {
-		return asr.Result{}, err
-	}
-	return collect(events)
+	return r.transcribeOne(ctx, client, src, opts)
 }
 
 func (r Runner) Stream(ctx context.Context, src *audio.Source, opts asr.Options) (<-chan asr.Event, error) {
+	return r.StreamFrames(ctx, src, opts)
+}
+
+func (r Runner) StreamFrames(ctx context.Context, src asr.PCMFrameSource, opts asr.Options) (<-chan asr.Event, error) {
 	enc, err := audio.NewOpusEncoder()
 	if err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func (r Runner) transcribeChunks(ctx context.Context, client streamClient, chunk
 }
 
 func (r Runner) transcribeChunkWithFallback(ctx context.Context, client streamClient, chunk *audio.Source, opts asr.Options, offset float64, nextSegmentIndex *int) (asr.Result, error) {
-	res, err := transcribeOne(ctx, client, chunk, opts)
+	res, err := r.transcribeOne(ctx, client, chunk, opts)
 	if err == nil {
 		if strings.TrimSpace(res.Text) == "" {
 			err = ErrEmptyTranscript
@@ -181,6 +181,22 @@ func transcribeOne(ctx context.Context, client streamClient, src *audio.Source, 
 	return collect(events)
 }
 
+func (r Runner) transcribeOne(ctx context.Context, client streamClient, src *audio.Source, opts asr.Options) (asr.Result, error) {
+	res, err := transcribeOne(ctx, client, src, opts)
+	if !isCredentialRecoverable(err) {
+		return res, err
+	}
+	_, reissueErr := (asr.CredentialManager{Path: r.Config.CredentialPath, UserAgent: r.Config.UserAgent}).Reissue(ctx)
+	if reissueErr != nil {
+		return res, err
+	}
+	return transcribeOne(ctx, client, src.Clone(), opts)
+}
+
+func isCredentialRecoverable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "service discovery failure")
+}
+
 func normalizeChunkResult(res asr.Result, language string, offset, duration float64, nextSegmentIndex *int) asr.Result {
 	res.Language = language
 	res.Duration = duration
@@ -212,6 +228,8 @@ func collect(events <-chan asr.Event) (asr.Result, error) {
 			result.Text = ev.Text
 			result.Duration = ev.Duration
 			result.Language = "zh"
+			result.Results = ev.Results
+			result.Extra = ev.Extra
 		}
 	}
 	if strings.TrimSpace(result.Text) == "" {

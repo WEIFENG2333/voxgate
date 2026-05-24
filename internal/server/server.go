@@ -103,20 +103,6 @@ func (s *Server) translations(w http.ResponseWriter, r *http.Request) {
 	writeOpenAIError(w, http.StatusBadRequest, "unsupported_request_error", "translation to English is not supported by this backend", "unsupported")
 }
 
-func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
-	if !allowMethod(w, r, http.MethodGet) {
-		return
-	}
-	if !s.authorize(w, r) {
-		return
-	}
-	if !s.Config.EnableRealtime {
-		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "realtime endpoint is disabled", "not_found")
-		return
-	}
-	writeOpenAIError(w, http.StatusNotImplemented, "unsupported_request_error", "OpenAI realtime compatibility is not implemented yet", "unsupported")
-}
-
 func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed", "method_not_allowed")

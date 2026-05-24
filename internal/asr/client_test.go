@@ -166,6 +166,102 @@ func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing
 	}
 }
 
+func TestClientReissuesDeviceAfterRepeatedHandshakeFailure(t *testing.T) {
+	var connections atomic.Int32
+	var taskRequests atomic.Int32
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		n := connections.Add(1)
+		_, _, _ = conn.ReadMessage()
+		switch n {
+		case 1, 2:
+			_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFailed", StatusCode: 50700000, StatusMessage: "service discovery failure"}))
+			return
+		case 3:
+			if got := r.URL.Query().Get("device_id"); got != "new-device" {
+				t.Errorf("device_id = %q, want new-device", got)
+			}
+			_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+			for {
+				_, data, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				method, _ := parseTestRequestMethod(data)
+				if method == "TaskRequest" {
+					taskRequests.Add(1)
+				}
+				if method == "FinishSession" {
+					sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "重新注册后成功", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+					_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
+					return
+				}
+			}
+		default:
+			t.Errorf("unexpected connection %d", n)
+		}
+	}))
+	defer srv.Close()
+
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := SaveCredentials(credPath, Credentials{DeviceID: "old-device", CDID: "old-cdid", Token: "old-token", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Config: ClientConfig{
+		CredentialPath: credPath,
+		WebSocketURL:   "ws" + strings.TrimPrefix(srv.URL, "http"),
+		HTTP: &http.Client{Transport: httpClientFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Path, "/service/2/device_register/") {
+				return jsonResponse(req, `{"device_id_str":"new-device","install_id":"new-install"}`), nil
+			}
+			return jsonResponse(req, `{"data":{"settings":{"asr_config":{"app_key":"new-token"}}}}`), nil
+		})},
+	}}
+	src := &fakeSource{frames: [][]byte{{0}, {0}}}
+	events, err := client.Transcribe(context.Background(), src, fakeEncoder{}, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done string
+	for ev := range events {
+		if ev.Type == EventError {
+			t.Fatalf("event error: %+v", ev.Error)
+		}
+		if ev.Type == EventTranscriptDone {
+			done = ev.Text
+		}
+	}
+	if done != "重新注册后成功" {
+		t.Fatalf("bad done text: %q", done)
+	}
+	if connections.Load() != 3 {
+		t.Fatalf("connections = %d, want 3", connections.Load())
+	}
+	if src.i != 2 {
+		t.Fatalf("source consumed %d frames, want 2", src.i)
+	}
+	if taskRequests.Load() != 3 {
+		t.Fatalf("task requests = %d, want 3 including final silence frame", taskRequests.Load())
+	}
+	creds, err := LoadCredentials(credPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.DeviceID != "new-device" || creds.Token != "new-token" {
+		t.Fatalf("credentials not reissued: %+v", creds)
+	}
+}
+
 func sendResult(t *testing.T, conn *websocket.Conn, v map[string]any) {
 	t.Helper()
 	data, _ := json.Marshal(v)
@@ -189,11 +285,21 @@ func parseTestRequestMethod(data []byte) (string, error) {
 type tokenRoundTripper struct{}
 
 func (tokenRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return jsonResponse(req, `{"data":{"settings":{"asr_config":{"app_key":"fresh"}}}}`), nil
+}
+
+type httpClientFunc func(*http.Request) (*http.Response, error)
+
+func (f httpClientFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func jsonResponse(req *http.Request, body string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Status:     "200 OK",
 		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(`{"data":{"settings":{"asr_config":{"app_key":"fresh"}}}}`)),
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    req,
-	}, nil
+	}
 }

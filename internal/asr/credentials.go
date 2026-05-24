@@ -86,6 +86,29 @@ func (m CredentialManager) Ensure(ctx context.Context, forceRefresh bool) (Crede
 	return creds, nil
 }
 
+func (m CredentialManager) Reissue(ctx context.Context) (Credentials, error) {
+	if m.UserAgent == "" {
+		m.UserAgent = DefaultUserAgent
+	}
+	if m.HTTP == nil {
+		m.HTTP = &http.Client{Timeout: 20 * time.Second}
+	}
+	creds, err := m.Register(ctx)
+	if err != nil {
+		return Credentials{}, err
+	}
+	token, err := m.FetchToken(ctx, creds.DeviceID, creds.CDID)
+	if err != nil {
+		return Credentials{}, err
+	}
+	creds.Token = token
+	creds.TokenUpdatedAtMS = time.Now().UnixMilli()
+	if err := SaveCredentials(m.Path, creds); err != nil {
+		return Credentials{}, err
+	}
+	return creds, nil
+}
+
 func LoadCredentials(path string) (Credentials, error) {
 	if path == "" {
 		path = DefaultCredentialPath()

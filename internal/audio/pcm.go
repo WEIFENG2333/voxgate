@@ -28,6 +28,10 @@ func NewSourceFromPCM(pcm []byte) *Source {
 	return &Source{data: pcm}
 }
 
+func (s *Source) Clone() *Source {
+	return &Source{data: s.data}
+}
+
 func Open(ctx context.Context, path string, inputFormat string, sampleRate int) (*Source, error) {
 	var data []byte
 	var err error

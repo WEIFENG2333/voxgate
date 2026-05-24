@@ -13,7 +13,7 @@ import (
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
 	"github.com/WEIFENG2333/voxgate/internal/audio"
-	"github.com/WEIFENG2333/voxgate/internal/transcriber"
+	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
 var realtimeUpgrader = websocket.Upgrader{
@@ -142,14 +142,9 @@ func (s *Server) handleRealtimeConn(ctx context.Context, rw *realtimeWriter) {
 func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter, itemID string, src *audio.LiveSource) {
 	reqCtx, cancel := context.WithTimeout(ctx, s.Config.RequestTimeout)
 	defer cancel()
-	opts := asr.DefaultOptions()
-	opts.EnablePunctuation = s.Config.EnablePunctuation
-	opts.EnableThreePass = s.Config.EnableThreePass
-	opts.EnableTwoPass = s.Config.EnableTwoPass
-	opts.RequestTimeout = s.Config.RequestTimeout
-	opts.Realtime = true
-	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: s.Config.CredentialPath, UserAgent: s.Config.UserAgent, WebSocketURL: s.Config.WebSocketURL}}
-	events, err := runner.StreamFrames(reqCtx, src, opts)
+	svc := s.transcriptionService()
+	opts := svc.Options(transcription.OptionInput{RequestTimeout: s.Config.RequestTimeout, Realtime: true})
+	events, err := svc.StreamFrames(reqCtx, src, opts)
 	if err != nil {
 		_ = writeRealtimeTranscriptionFailed(rw, itemID, err)
 		return

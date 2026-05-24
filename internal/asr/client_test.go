@@ -39,6 +39,26 @@ type fakeEncoder struct{}
 func (fakeEncoder) EncodePCMFrame(p []byte) ([]byte, error) { return []byte{1, 2, 3}, nil }
 func (fakeEncoder) Close() error                            { return nil }
 
+type dynamicDurationSource struct {
+	frames [][]byte
+	i      atomic.Int32
+}
+
+func (s *dynamicDurationSource) NextFrame() ([]byte, bool, error) {
+	i := int(s.i.Load())
+	if i >= len(s.frames) {
+		return nil, false, nil
+	}
+	s.i.Add(1)
+	return s.frames[i], true, nil
+}
+
+func (s *dynamicDurationSource) Duration() time.Duration {
+	return time.Duration(s.i.Load()) * time.Second
+}
+
+func (s *dynamicDurationSource) Close() error { return nil }
+
 func TestClientMockWebSocketThreePassWithReset(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +109,57 @@ func TestClientMockWebSocketThreePassWithReset(t *testing.T) {
 		t.Fatalf("bad done text: %q", done)
 	}
 	_ = os.Remove(credPath)
+}
+
+func TestClientReportsFinalDurationAfterAudioIsSent(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			method, _ := parseTestRequestMethod(data)
+			if method == "FinishSession" {
+				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "完成", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := SaveCredentials(credPath, Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Config: ClientConfig{CredentialPath: credPath, WebSocketURL: "ws" + strings.TrimPrefix(srv.URL, "http")}}
+	src := &dynamicDurationSource{frames: [][]byte{{0}, {0}}}
+	events, err := client.Transcribe(context.Background(), src, fakeEncoder{}, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doneDuration float64
+	for ev := range events {
+		if ev.Type == EventError {
+			t.Fatalf("event error: %+v", ev.Error)
+		}
+		if ev.Type == EventTranscriptDone {
+			doneDuration = ev.Duration
+		}
+	}
+	if doneDuration != 2 {
+		t.Fatalf("done duration = %.0f, want 2", doneDuration)
+	}
 }
 
 func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing.T) {

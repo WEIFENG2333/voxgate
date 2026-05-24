@@ -21,6 +21,7 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/output"
 	"github.com/WEIFENG2333/voxgate/internal/server"
 	"github.com/WEIFENG2333/voxgate/internal/transcriber"
+	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
 const version = "0.2.6"
@@ -174,30 +175,31 @@ func transcribe(args []string, cfg config.Config) int {
 		w = f
 	}
 	ctx := context.Background()
-	opts := asr.DefaultOptions()
-	opts.Language = *language
-	opts.Prompt = *prompt
-	opts.EnablePunctuation = cfg.ASR.EnablePunctuation && !*noPunc
-	opts.EnableThreePass = cfg.ASR.EnableThreePass && !*disableThreePass
-	opts.EnableTwoPass = cfg.ASR.EnableTwoPass
-	opts.RequestTimeout = *requestTimeout
-	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: cfg.CredentialPath, UserAgent: cfg.ASR.UserAgent, ChunkDuration: *chunkDuration}}
+	svc := transcription.FromAppConfig(cfg)
+	svc.Config.ChunkDuration = *chunkDuration
 	liveInput := isLiveStdinStream(fs.Arg(0), *inputFormat, *stream)
-	opts.Realtime = *realtime && !liveInput
+	opts := svc.Options(transcription.OptionInput{
+		Language:           *language,
+		Prompt:             *prompt,
+		DisablePunctuation: *noPunc,
+		DisableThreePass:   *disableThreePass,
+		RequestTimeout:     *requestTimeout,
+		Realtime:           *realtime && !liveInput,
+	})
 	if *stream {
-		events, err := streamEvents(ctx, runner, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
+		events, err := streamEvents(ctx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
 		if err != nil {
 			printErr(streamErrorCode(err), err)
 			return streamErrorExitCode(err)
 		}
 		return writeStreamEvents(w, chosen, events)
 	}
-	src, err := audio.Open(ctx, fs.Arg(0), *inputFormat, *sampleRate)
+	src, err := svc.Open(ctx, fs.Arg(0), *inputFormat, *sampleRate)
 	if err != nil {
 		printErr("audio_error", err)
 		return 5
 	}
-	result, err := runner.Transcribe(ctx, src, opts, !*noChunk)
+	result, err := svc.Transcribe(ctx, src, opts, !*noChunk)
 	if err != nil {
 		printErr("asr_error", err)
 		return 1
@@ -215,20 +217,20 @@ func isLiveStdinStream(path, inputFormat string, stream bool) bool {
 	return stream && path == "-" && (inputFormat == "pcm16" || inputFormat == "raw")
 }
 
-func streamEvents(ctx context.Context, runner transcriber.Runner, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {
+func streamEvents(ctx context.Context, svc transcription.Service, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {
 	if liveInput {
 		if sampleRate != 0 && sampleRate != audio.SampleRate {
 			return nil, errLiveStdinSampleRate
 		}
 		src := audio.NewLiveSource()
 		go copyStdinPCM(src)
-		return runner.StreamFrames(ctx, src, opts)
+		return svc.StreamFrames(ctx, src, opts)
 	}
-	src, err := audio.Open(ctx, path, inputFormat, sampleRate)
+	src, err := svc.Open(ctx, path, inputFormat, sampleRate)
 	if err != nil {
 		return nil, err
 	}
-	return runner.StreamWithChunking(ctx, src, opts, allowChunking)
+	return svc.Stream(ctx, src, opts, allowChunking)
 }
 
 func copyStdinPCM(src *audio.LiveSource) {

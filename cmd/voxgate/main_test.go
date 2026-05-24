@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
-	"github.com/WEIFENG2333/voxgate/internal/transcriber"
+	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
 func TestParseGlobalAcceptsFlagsAfterSubcommand(t *testing.T) {
@@ -89,7 +89,7 @@ func TestIsLiveStdinStream(t *testing.T) {
 }
 
 func TestStreamEventsRejectsLiveStdinSampleRate(t *testing.T) {
-	_, err := streamEvents(context.Background(), transcriber.Runner{}, "-", "pcm16", 8000, asr.Options{}, true, true)
+	_, err := streamEvents(context.Background(), transcription.Service{}, "-", "pcm16", 8000, asr.Options{}, true, true)
 	if !errors.Is(err, errLiveStdinSampleRate) {
 		t.Fatalf("streamEvents error = %v, want errLiveStdinSampleRate", err)
 	}

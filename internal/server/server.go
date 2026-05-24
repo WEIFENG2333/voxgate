@@ -15,7 +15,7 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/asr"
 	"github.com/WEIFENG2333/voxgate/internal/audio"
 	"github.com/WEIFENG2333/voxgate/internal/output"
-	"github.com/WEIFENG2333/voxgate/internal/transcriber"
+	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
 type Config struct {
@@ -147,21 +147,19 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(tmp)
 	ctx, cancel := context.WithTimeout(r.Context(), s.Config.RequestTimeout)
 	defer cancel()
-	src, err := audio.Open(ctx, tmp, "", audio.SampleRate)
+	svc := s.transcriptionService()
+	src, err := svc.Open(ctx, tmp, "", audio.SampleRate)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error(), "audio_decode_failed")
 		return
 	}
-	opts := asr.DefaultOptions()
-	opts.EnablePunctuation = s.Config.EnablePunctuation
-	opts.EnableThreePass = s.Config.EnableThreePass
-	opts.EnableTwoPass = s.Config.EnableTwoPass
-	opts.RequestTimeout = s.Config.RequestTimeout
-	opts.Language = formValue(r.MultipartForm, "language", opts.Language)
-	opts.Prompt = formValue(r.MultipartForm, "prompt", "")
-	runner := transcriber.Runner{Config: transcriber.Config{CredentialPath: s.Config.CredentialPath, UserAgent: s.Config.UserAgent, WebSocketURL: s.Config.WebSocketURL}}
+	opts := svc.Options(transcription.OptionInput{
+		Language:       formValue(r.MultipartForm, "language", "zh"),
+		Prompt:         formValue(r.MultipartForm, "prompt", ""),
+		RequestTimeout: s.Config.RequestTimeout,
+	})
 	if stream {
-		events, err := runner.StreamWithChunking(ctx, src, opts, true)
+		events, err := svc.Stream(ctx, src, opts, true)
 		if err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error(), "transcribe_failed")
 			return
@@ -169,7 +167,7 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 		s.streamSSE(w, events)
 		return
 	}
-	result, err := runner.Transcribe(ctx, src, opts, true)
+	result, err := svc.Transcribe(ctx, src, opts, true)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error(), "asr_error")
 		return
@@ -178,6 +176,18 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	if err := output.WriteResult(w, responseFormat, result); err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error(), "encode_failed")
 	}
+}
+
+func (s *Server) transcriptionService() transcription.Service {
+	return transcription.New(transcription.Config{
+		CredentialPath:    s.Config.CredentialPath,
+		UserAgent:         s.Config.UserAgent,
+		WebSocketURL:      s.Config.WebSocketURL,
+		EnablePunctuation: s.Config.EnablePunctuation,
+		EnableThreePass:   s.Config.EnableThreePass,
+		EnableTwoPass:     s.Config.EnableTwoPass,
+		RequestTimeout:    s.Config.RequestTimeout,
+	})
 }
 
 func (s *Server) streamSSE(w http.ResponseWriter, events <-chan asr.Event) {

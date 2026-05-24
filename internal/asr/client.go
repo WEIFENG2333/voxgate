@@ -161,7 +161,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		sendErr <- c.sendAudio(ctx, conn, requestID, creds.Token, source, encoder, opts.Realtime)
 	}()
 	go func() {
-		recvErr <- c.recv(ctx, conn, requestID, source.Duration(), events, done)
+		recvErr <- c.recv(ctx, conn, requestID, source, events, done)
 	}()
 	select {
 	case err := <-sendErr:
@@ -233,7 +233,7 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, 
 	return sendPB(conn, asrproto.Request{Token: token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
 }
 
-func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string, duration time.Duration, events chan<- Event, done <-chan struct{}) error {
+func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}) error {
 	var agg SegmentResetAggregator
 	start := time.Now()
 	for {
@@ -250,7 +250,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 				if agg.Text() == "" {
 					return fmt.Errorf("websocket closed normally before any transcript result")
 				}
-				events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: agg.Text(), Duration: duration.Seconds()}
+				events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: agg.Text(), Duration: source.Duration().Seconds()}
 				return nil
 			}
 			return err
@@ -260,7 +260,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			return fmt.Errorf("%s (code=%d): %s", resp.MessageType, resp.StatusCode, resp.StatusMessage)
 		case "SessionFinished":
 			text := agg.Text()
-			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: duration.Seconds()}
+			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: source.Duration().Seconds()}
 			return nil
 		}
 		parsed, err := ParseResultJSON(resp.ResultJSON)
@@ -282,7 +282,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedFinal:
 			text := agg.Final(parsed.Text)
-			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: duration.Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			return nil
 		}
 	}

@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -9,22 +10,42 @@ import (
 var ErrLiveSourceClosed = errors.New("live source is closed")
 
 type LiveSource struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	buf      []byte
-	closed   bool
-	duration time.Duration
+	mu           sync.Mutex
+	cond         *sync.Cond
+	buf          []byte
+	closed       bool
+	duration     time.Duration
+	maxBufferLen int
 }
 
 func NewLiveSource() *LiveSource {
+	return NewLiveSourceWithMaxBuffer(0)
+}
+
+func NewLiveSourceWithMaxBuffer(maxBufferLen int) *LiveSource {
 	s := &LiveSource{}
+	s.maxBufferLen = maxBufferLen
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
 
 func (s *LiveSource) WritePCM(p []byte) error {
+	return s.WritePCMContext(context.Background(), p)
+}
+
+func (s *LiveSource) WritePCMContext(ctx context.Context, p []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for s.maxBufferLen > 0 && len(s.buf) > 0 && len(s.buf)+len(p) > s.maxBufferLen && !s.closed {
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			s.mu.Lock()
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+		s.mu.Lock()
+	}
 	if s.closed {
 		return ErrLiveSourceClosed
 	}
@@ -47,10 +68,12 @@ func (s *LiveSource) NextFrame() ([]byte, bool, error) {
 	if len(s.buf) >= BytesPerFrame {
 		copy(frame, s.buf[:BytesPerFrame])
 		s.buf = s.buf[BytesPerFrame:]
+		s.cond.Broadcast()
 		return frame, true, nil
 	}
 	copy(frame, s.buf)
 	s.buf = nil
+	s.cond.Broadcast()
 	return frame, true, nil
 }
 

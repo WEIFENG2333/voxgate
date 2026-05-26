@@ -3,7 +3,9 @@ package asr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,6 +28,8 @@ type ClientConfig struct {
 type Client struct {
 	Config ClientConfig
 }
+
+var finishSessionWaitTimeout = 15 * time.Second
 
 type PCMFrameEncoder interface {
 	EncodePCMFrame([]byte) ([]byte, error)
@@ -157,17 +161,20 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	sendErr := make(chan error, 1)
 	recvErr := make(chan error, 1)
 	done := make(chan struct{})
+	finishedSending := make(chan struct{})
 	go func() {
 		sendErr <- c.sendAudio(ctx, conn, requestID, creds.Token, source, encoder, opts.Realtime)
 	}()
 	go func() {
-		recvErr <- c.recv(ctx, conn, requestID, source, events, done)
+		recvErr <- c.recv(ctx, conn, requestID, source, events, done, finishedSending)
 	}()
 	select {
 	case err := <-sendErr:
 		if err != nil {
 			return false, err
 		}
+		close(finishedSending)
+		_ = conn.SetReadDeadline(time.Now().Add(finishSessionWaitTimeout))
 		select {
 		case err := <-recvErr:
 			return false, err
@@ -233,7 +240,7 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, 
 	return sendPB(conn, asrproto.Request{Token: token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
 }
 
-func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}) error {
+func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
 	var agg SegmentResetAggregator
 	start := time.Now()
 	for {
@@ -246,6 +253,14 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 		}
 		resp, err := readPB(conn)
 		if err != nil {
+			select {
+			case <-finishedSending:
+				if isTimeout(err) {
+					events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: agg.Text(), Duration: source.Duration().Seconds()}
+					return nil
+				}
+			default:
+			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				if agg.Text() == "" {
 					return fmt.Errorf("websocket closed normally before any transcript result")
@@ -286,6 +301,11 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			return nil
 		}
 	}
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return err != nil && (errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()))
 }
 
 func sendPB(conn *websocket.Conn, req asrproto.Request) error {

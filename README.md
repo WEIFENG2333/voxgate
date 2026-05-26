@@ -221,10 +221,10 @@ Supported client events:
 |---|---|
 | `session.update` | accepted; returns `session.updated` |
 | `input_audio_buffer.append` | append base64-encoded PCM16 audio |
-| `input_audio_buffer.commit` | transcribe the current buffer |
+| `input_audio_buffer.commit` | finish the current item, useful when the input stream stops |
 | `input_audio_buffer.clear` | clear buffered audio |
 
-The current compatibility subset expects 16 kHz mono PCM16 input. It does not implement automatic server VAD yet, so clients should send `input_audio_buffer.commit` when they want transcription to start.
+The current compatibility subset expects 16 kHz mono PCM16 input. Audio appended to the buffer is sent upstream immediately; clients do not need to call `commit` to start receiving partial transcripts. When the upstream service finishes an utterance, `voxgate` emits `completed` and automatically opens a new upstream ASR item for later `append` events on the same WebSocket connection. Send `commit` when your capture source stops and you want the current item to settle.
 
 Realtime result events use OpenAI-style names:
 

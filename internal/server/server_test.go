@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -194,6 +195,87 @@ func TestRealtimeTranscriptionStreamsBeforeCommit(t *testing.T) {
 	t.Fatal("did not receive transcription delta before commit")
 }
 
+func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
+	wsURL, closeWS := mockASRAutoCompleteServer(t, []string{"第一段", "第二段"})
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http")+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var msg map[string]any
+	_ = conn.ReadJSON(&msg)
+
+	pcm := minimalPCM()
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	first := readRealtimeCompleted(t, conn)
+	if first["item_id"] != "item_000000" || first["transcript"] != "第一段" {
+		t.Fatalf("first completed event = %v", first)
+	}
+
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	second := readRealtimeCompleted(t, conn)
+	if second["item_id"] != "item_000001" || second["transcript"] != "第二段" {
+		t.Fatalf("second completed event = %v", second)
+	}
+}
+
+func TestRealtimeTranscriptionRollsLongRunningItem(t *testing.T) {
+	oldMax := realtimeMaxItemDuration
+	realtimeMaxItemDuration = 50 * time.Millisecond
+	defer func() { realtimeMaxItemDuration = oldMax }()
+
+	wsURL, closeWS := mockASRServer(t, "滚动完成")
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http")+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var msg map[string]any
+	_ = conn.ReadJSON(&msg)
+
+	pcm := minimalPCM()
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	first := readRealtimeCompleted(t, conn)
+	if first["item_id"] != "item_000000" {
+		t.Fatalf("first completed event = %v", first)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
+		t.Fatal(err)
+	}
+	second := readRealtimeCompleted(t, conn)
+	if second["item_id"] != "item_000001" {
+		t.Fatalf("second completed event = %v", second)
+	}
+}
+
 func TestTranscriptionsRejectsUnsupportedFormatBeforeASR(t *testing.T) {
 	srv := New(Config{RequestTimeout: 10 * time.Second})
 	body, contentType := multipartBody(t, "test.wav", minimalWAV(), field{"response_format", "xml"})
@@ -292,6 +374,68 @@ func mockASRStreamingServer(t *testing.T) (string, func()) {
 		}
 	}))
 	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close
+}
+
+func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func()) {
+	t.Helper()
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		index := int(connections.Add(1)) - 1
+		if index >= len(finalTexts) {
+			index = len(finalTexts) - 1
+		}
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			req, _ := parseRequestMethod(data)
+			if req == "TaskRequest" {
+				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": finalTexts[index], "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
+				return
+			}
+		}
+	}))
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close
+}
+
+func readRealtimeCompleted(t *testing.T, conn *websocket.Conn) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		var msg map[string]any
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			var netErr interface{ Timeout() bool }
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+			t.Fatal(err)
+		}
+		switch msg["type"] {
+		case "conversation.item.input_audio_transcription.completed":
+			return msg
+		case "error", "conversation.item.input_audio_transcription.failed":
+			t.Fatalf("unexpected realtime error: %v", msg)
+		}
+	}
+	t.Fatal("did not receive realtime completed event")
+	return nil
 }
 
 func parseRequestMethod(data []byte) (string, error) {

@@ -162,6 +162,63 @@ func TestClientReportsFinalDurationAfterAudioIsSent(t *testing.T) {
 	}
 }
 
+func TestClientFinishesEmptyResultAfterFinishSessionTimeout(t *testing.T) {
+	oldTimeout := finishSessionWaitTimeout
+	finishSessionWaitTimeout = 50 * time.Millisecond
+	defer func() { finishSessionWaitTimeout = oldTimeout }()
+
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			method, _ := parseTestRequestMethod(data)
+			if method == "FinishSession" {
+				time.Sleep(500 * time.Millisecond)
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := SaveCredentials(credPath, Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Config: ClientConfig{CredentialPath: credPath, WebSocketURL: "ws" + strings.TrimPrefix(srv.URL, "http")}}
+	events, err := client.Transcribe(context.Background(), &fakeSource{frames: [][]byte{{0}}}, fakeEncoder{}, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doneSeen bool
+	for ev := range events {
+		if ev.Type == EventError {
+			t.Fatalf("event error: %+v", ev.Error)
+		}
+		if ev.Type == EventTranscriptDone {
+			doneSeen = true
+			if ev.Text != "" {
+				t.Fatalf("done text = %q, want empty", ev.Text)
+			}
+		}
+	}
+	if !doneSeen {
+		t.Fatal("did not receive transcript done")
+	}
+}
+
 func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing.T) {
 	var connections atomic.Int32
 	var taskRequests atomic.Int32

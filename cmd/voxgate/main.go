@@ -24,7 +24,7 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
-const version = "0.2.6"
+const version = "0.2.7"
 
 type globalFlags struct {
 	configPath     string

@@ -9,6 +9,7 @@ import (
 
 var ErrLiveSourceClosed = errors.New("live source is closed")
 
+// LiveSource is a concurrent PCM frame source for realtime audio capture.
 type LiveSource struct {
 	mu           sync.Mutex
 	cond         *sync.Cond
@@ -22,6 +23,8 @@ func NewLiveSource() *LiveSource {
 	return NewLiveSourceWithMaxBuffer(0)
 }
 
+// NewLiveSourceWithMaxBuffer creates a realtime PCM source with optional
+// backpressure. A maxBufferLen of zero disables the limit.
 func NewLiveSourceWithMaxBuffer(maxBufferLen int) *LiveSource {
 	s := &LiveSource{}
 	s.maxBufferLen = maxBufferLen

@@ -9,6 +9,9 @@ import (
 
 var windowsEnvPattern = regexp.MustCompile(`%([^%]+)%`)
 
+// Expand expands common user-facing path forms across platforms.
+// It supports ~/ and ~\, POSIX-style environment variables, and Windows
+// %NAME% variables so config files can be shared more easily.
 func Expand(path string) string {
 	if path == "" {
 		return path

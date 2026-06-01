@@ -93,6 +93,7 @@ func ffmpegPath() string {
 	return "ffmpeg"
 }
 
+// NextFrame returns the next 20 ms PCM frame, padding the final frame with silence.
 func (s *Source) NextFrame() ([]byte, bool, error) {
 	if s.offset >= len(s.data) {
 		return nil, false, nil

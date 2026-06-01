@@ -14,6 +14,8 @@ const (
 	EventError             EventType = "error"
 )
 
+// Event is the internal streaming envelope used by the CLI, SSE endpoint, and
+// Realtime compatibility layer. Text is cumulative for transcript delta events.
 type Event struct {
 	Type         EventType      `json:"type"`
 	RequestID    string         `json:"request_id,omitempty"`

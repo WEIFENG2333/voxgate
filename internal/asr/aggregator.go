@@ -2,6 +2,9 @@ package asr
 
 import "strings"
 
+// SegmentResetAggregator turns upstream replacement-style partials into a
+// stable cumulative transcript. The upstream often starts a new phrase by
+// sending much shorter text; that reset is treated as a completed segment.
 type SegmentResetAggregator struct {
 	confirmed       string
 	lastSegmentText string

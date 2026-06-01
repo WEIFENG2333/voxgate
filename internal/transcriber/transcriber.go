@@ -84,6 +84,8 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 	var offset float64
 	nextSegmentIndex := 0
 	for _, chunk := range chunks {
+		// Long-file streaming uses serial chunks to stay within upstream session
+		// limits while keeping timestamps monotonic for downstream consumers.
 		enc, err := audio.NewOpusEncoder()
 		if err != nil {
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "encoder_error", Message: err.Error()}}
@@ -151,6 +153,8 @@ func (r Runner) transcribeChunkWithFallback(ctx context.Context, client streamCl
 		return asr.Result{}, err
 	}
 
+	// Some long chunks complete with an empty transcript even though smaller
+	// slices work. Retry recursively at a smaller duration before giving up.
 	var combined asr.Result
 	var b strings.Builder
 	subOffset := offset

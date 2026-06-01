@@ -42,6 +42,8 @@ type PCMFrameSource interface {
 	Close() error
 }
 
+// Transcribe starts a transcription session and returns events as soon as the
+// upstream sends them. Audio sending and response reading run concurrently.
 func (c Client) Transcribe(ctx context.Context, source PCMFrameSource, encoder PCMFrameEncoder, opts Options) (<-chan Event, error) {
 	events := make(chan Event, 32)
 	go func() {
@@ -79,6 +81,9 @@ func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource
 	if !retryable {
 		return err
 	}
+	// Handshake failures are usually credential-related: try a token refresh
+	// first, then fall back to a fresh device identity if the service still
+	// rejects the session.
 	creds, refreshErr := manager.Ensure(ctx, true)
 	if refreshErr == nil {
 		retryable, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
@@ -122,6 +127,9 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	if dialer == nil {
 		dialer = websocket.DefaultDialer
 	}
+
+	// The upstream protocol is a two-step handshake: StartTask authorizes the
+	// task, then StartSession declares audio format and recognition options.
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return true, err
@@ -158,6 +166,8 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 	events <- Event{Type: EventSessionStarted, RequestID: requestID}
 
+	// Send and receive concurrently so partial transcripts are forwarded while
+	// audio is still being uploaded. This is the core streaming path.
 	sendErr := make(chan error, 1)
 	recvErr := make(chan error, 1)
 	done := make(chan struct{})
@@ -174,6 +184,8 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 			return false, err
 		}
 		close(finishedSending)
+		// After FinishSession the backend may close without an explicit final
+		// message. Bound the wait and let recv synthesize transcript.done.
 		_ = conn.SetReadDeadline(time.Now().Add(finishSessionWaitTimeout))
 		select {
 		case err := <-recvErr:
@@ -212,6 +224,7 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, 
 		if frameIndex == 0 {
 			state = asrproto.FrameStateFirst
 		}
+		// Upstream timestamps are logical audio time, not wall-clock send time.
 		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
 		if err := sendPB(conn, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}); err != nil {
 			return err
@@ -222,6 +235,8 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, 
 			return ctx.Err()
 		default:
 		}
+		// File inputs can be sent as fast as possible; live/realtime inputs must
+		// preserve capture pace so the upstream VAD sees natural timing.
 		if realtime {
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -278,6 +293,9 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: source.Duration().Seconds()}
 			return nil
 		}
+		// Recognition payloads arrive as JSON nested inside the protobuf frame.
+		// Parser classification keeps the transport code independent from the
+		// upstream's three-pass result details.
 		parsed, err := ParseResultJSON(resp.ResultJSON)
 		if err != nil || parsed.Kind == ParsedNoop {
 			continue

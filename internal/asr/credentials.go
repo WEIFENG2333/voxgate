@@ -41,6 +41,8 @@ type Credentials struct {
 	TokenUpdatedAtMS int64  `json:"token_updated_at_ms"`
 }
 
+// CredentialManager creates and refreshes the device credentials required by
+// the upstream input-method ASR service.
 type CredentialManager struct {
 	Path      string
 	UserAgent string

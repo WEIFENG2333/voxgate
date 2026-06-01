@@ -35,6 +35,7 @@ type Response struct {
 	Unknown11     []byte
 }
 
+// MarshalRequest encodes Request using the observed upstream protobuf field numbers.
 func MarshalRequest(req Request) []byte {
 	var b []byte
 	writeString(&b, 2, req.Token)

@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// ParsedKind classifies one upstream result payload.
 type ParsedKind int
 
 const (
@@ -15,6 +16,7 @@ const (
 	ParsedFinal
 )
 
+// ParsedResult is the normalized form of an upstream ResultJSON message.
 type ParsedResult struct {
 	Kind        ParsedKind
 	Text        string
@@ -66,6 +68,8 @@ type resultJSON struct {
 	} `json:"extra"`
 }
 
+// ParseResultJSON decodes the upstream ResultJSON payload and classifies it as
+// VAD, interim, definite, final, or no-op.
 func ParseResultJSON(s string) (ParsedResult, error) {
 	if strings.TrimSpace(s) == "" {
 		return ParsedResult{Kind: ParsedNoop}, nil

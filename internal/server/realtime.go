@@ -55,6 +55,7 @@ type realtimeWriter struct {
 	mu   sync.Mutex
 }
 
+// WriteJSON serializes WebSocket writes from multiple realtime goroutines.
 func (w *realtimeWriter) WriteJSON(v any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -163,6 +164,8 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 				_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", err.Error(), "audio_buffer_closed")
 				return current
 			}
+			// Do not block the client control loop behind a slow upstream item.
+			// Roll forward and let the previous item finish asynchronously.
 			s.log.Debug("realtime item rolled after append backpressure", "session_id", sessionID, "item_id", current.id, "error", err)
 			current.source.CloseWrite()
 			current = s.ensureRealtimeItem(ctx, rw, nil, itemIndex, itemDoneCh)
@@ -235,6 +238,8 @@ func (s *Server) ensureRealtimeItem(ctx context.Context, rw *realtimeWriter, cur
 	(*itemIndex)++
 	item := &realtimeItem{id: itemID, source: audio.NewLiveSourceWithMaxBuffer(realtimeMaxBufferedAudio), created: time.Now()}
 	s.log.Debug("realtime item created", "item_id", itemID)
+	// Each item owns one upstream ASR session. The client WebSocket can stay
+	// open while old items finish and new items accept audio.
 	go s.transcribeRealtimeLive(ctx, rw, item.id, item.source, itemDoneCh)
 	return item
 }

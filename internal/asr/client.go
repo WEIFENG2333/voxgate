@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,6 +109,7 @@ func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource
 }
 
 func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) (bool, error) {
+	stats := newSessionStats(requestID, opts.RequestTimeout)
 	wsURL := c.Config.WebSocketURL
 	if wsURL == "" {
 		wsURL = WebSocketURL
@@ -136,19 +139,20 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	// task, then StartSession declares audio format and recognition options.
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
-		return true, err
+		return true, stats.wrap("dial upstream websocket", err)
 	}
 	defer conn.Close()
 	trace := newFrameTrace(c.Config.TraceWriter)
 	send := func(req asrproto.Request) error { return sendPBTrace(conn, trace, req) }
 	read := func() (asrproto.Response, error) { return readPBTrace(conn, trace) }
 	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartTask, RequestID: requestID}); err != nil {
-		return true, err
+		return true, stats.wrap("send StartTask", err)
 	}
 	resp, err := read()
 	if err != nil {
-		return true, err
+		return true, stats.wrap("read StartTask response", err)
 	}
+	stats.received(resp, source.Duration())
 	if resp.MessageType == MessageTaskFailed {
 		return true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
@@ -162,12 +166,13 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		},
 	})
 	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartSession, Payload: string(sessionPayload), RequestID: requestID}); err != nil {
-		return true, err
+		return true, stats.wrap("send StartSession", err)
 	}
 	resp, err = read()
 	if err != nil {
-		return true, err
+		return true, stats.wrap("read StartSession response", err)
 	}
+	stats.received(resp, source.Duration())
 	if resp.MessageType == MessageSessionFailed {
 		return true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
@@ -180,15 +185,15 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	done := make(chan struct{})
 	finishedSending := make(chan struct{})
 	go func() {
-		sendErr <- c.sendAudio(ctx, conn, trace, requestID, creds.Token, source, encoder, opts.Realtime)
+		sendErr <- c.sendAudio(ctx, conn, trace, stats, requestID, creds.Token, source, encoder, opts.Realtime)
 	}()
 	go func() {
-		recvErr <- c.recv(ctx, conn, trace, requestID, source, events, done, finishedSending)
+		recvErr <- c.recv(ctx, conn, trace, stats, requestID, source, events, done, finishedSending)
 	}()
 	select {
 	case err := <-sendErr:
 		if err != nil {
-			return false, err
+			return false, stats.wrap("send audio", err)
 		}
 		close(finishedSending)
 		// After FinishSession the backend may close without an explicit final
@@ -196,23 +201,23 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		_ = conn.SetReadDeadline(time.Now().Add(finishSessionWaitTimeout))
 		select {
 		case err := <-recvErr:
-			return false, err
+			return false, stats.wrap("receive final response", err)
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return false, stats.wrap("wait for final response", ctx.Err())
 		}
 	case err := <-recvErr:
 		if err != nil {
-			return false, err
+			return false, stats.wrap("receive upstream response", err)
 		}
 		close(done)
 		return false, nil
 	case <-ctx.Done():
 		close(done)
-		return false, ctx.Err()
+		return false, stats.wrap("transcription session", ctx.Err())
 	}
 }
 
-func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *frameTrace, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder, realtime bool) error {
+func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder, realtime bool) error {
 	timestamp := time.Now().UnixMilli()
 	frameIndex := 0
 	for {
@@ -237,6 +242,7 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 			return err
 		}
 		frameIndex++
+		stats.sentFrame(frameIndex, source.Duration())
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -258,11 +264,12 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: ServiceNameASR, MethodName: MethodTaskRequest, Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
 			return err
 		}
+		stats.sentFrame(frameIndex+1, source.Duration())
 	}
 	return sendPBTrace(conn, trace, asrproto.Request{Token: token, ServiceName: ServiceNameASR, MethodName: MethodFinishSession, RequestID: requestID})
 }
 
-func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrace, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
+func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
 	lastText := ""
 	finalEmitted := false
 	start := time.Now()
@@ -299,6 +306,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			}
 			return err
 		}
+		stats.received(resp, source.Duration())
 		switch resp.MessageType {
 		case MessageTaskFailed, MessageSessionFailed:
 			return fmt.Errorf("%s (code=%d): %s", resp.MessageType, resp.StatusCode, resp.StatusMessage)
@@ -332,6 +340,74 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			lastText = ""
 		}
 	}
+}
+
+type sessionStats struct {
+	mu              sync.Mutex
+	requestID       string
+	requestTimeout  time.Duration
+	started         time.Time
+	framesSent      int
+	audioDuration   time.Duration
+	lastRecvAgoFrom time.Time
+	lastMessageType string
+	lastTextLen     int
+}
+
+func newSessionStats(requestID string, timeout time.Duration) *sessionStats {
+	return &sessionStats{requestID: requestID, requestTimeout: timeout, started: time.Now()}
+}
+
+func (s *sessionStats) sentFrame(count int, duration time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.framesSent = count
+	s.audioDuration = duration
+}
+
+func (s *sessionStats) received(resp asrproto.Response, duration time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audioDuration = duration
+	s.lastRecvAgoFrom = time.Now()
+	s.lastMessageType = string(resp.MessageType)
+	s.lastTextLen = resultTextLen(resp.ResultJSON)
+}
+
+func (s *sessionStats) wrap(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fields := []string{
+		fmt.Sprintf("stage=%s", stage),
+		fmt.Sprintf("request_id=%s", s.requestID),
+		fmt.Sprintf("elapsed=%s", time.Since(s.started).Round(time.Millisecond)),
+		fmt.Sprintf("audio_duration=%s", s.audioDuration.Round(time.Millisecond)),
+		fmt.Sprintf("frames_sent=%d", s.framesSent),
+	}
+	if s.requestTimeout > 0 {
+		fields = append(fields, fmt.Sprintf("request_timeout=%s", s.requestTimeout))
+	}
+	if s.lastMessageType != "" {
+		fields = append(fields, fmt.Sprintf("last_message_type=%s", s.lastMessageType))
+		if !s.lastRecvAgoFrom.IsZero() {
+			fields = append(fields, fmt.Sprintf("last_recv_ago=%s", time.Since(s.lastRecvAgoFrom).Round(time.Millisecond)))
+		}
+	}
+	if s.lastTextLen > 0 {
+		fields = append(fields, fmt.Sprintf("last_text_len=%d", s.lastTextLen))
+	}
+	return fmt.Errorf("%w (%s)", err, strings.Join(fields, ", "))
+}
+
+func resultTextLen(resultJSON string) int {
+	parsed, err := ParseResultJSON(resultJSON)
+	if err != nil {
+		return 0
+	}
+	return len([]rune(parsed.Text))
 }
 
 func isTimeout(err error) bool {

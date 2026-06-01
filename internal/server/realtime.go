@@ -254,7 +254,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 	reqCtx, cancel := context.WithTimeout(ctx, s.Config.RequestTimeout)
 	defer cancel()
 	svc := s.transcriptionService()
-	opts := svc.Options(transcription.OptionInput{RequestTimeout: s.Config.RequestTimeout, Realtime: true})
+	opts := svc.Options(transcription.OptionInput{RequestTimeout: s.Config.RequestTimeout})
 	events, err := svc.StreamFrames(reqCtx, src, opts)
 	if err != nil {
 		s.log.Error("realtime upstream stream failed", "item_id", itemID, "error", err)

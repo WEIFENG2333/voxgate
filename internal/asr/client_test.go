@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,21 @@ import (
 type fakeSource struct {
 	frames [][]byte
 	i      int
+}
+
+func TestSessionStatsWrapAddsDiagnosticContext(t *testing.T) {
+	stats := newSessionStats("req_test", 2*time.Second)
+	stats.sentFrame(3, 60*time.Millisecond)
+	err := stats.wrap("receive upstream response", context.DeadlineExceeded)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wrapped error does not preserve deadline exceeded: %v", err)
+	}
+	out := err.Error()
+	for _, want := range []string{"stage=receive upstream response", "request_id=req_test", "frames_sent=3", "audio_duration=60ms", "request_timeout=2s"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("error missing %q: %s", want, out)
+		}
+	}
 }
 
 func (f *fakeSource) NextFrame() ([]byte, bool, error) {

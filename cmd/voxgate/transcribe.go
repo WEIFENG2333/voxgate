@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -91,6 +92,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		svc.Config.TraceWriter = asr.NewSynchronizedWriter(traceWriter)
 	}
 	liveInput := isLiveStdinStream(fs.Arg(0), *inputFormat, *stream)
+	requestTimeoutSet := flagWasSet(fs, "request-timeout")
 	opts := svc.Options(transcription.OptionInput{
 		Language:           *language,
 		Prompt:             *prompt,
@@ -99,6 +101,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		RequestTimeout:     *requestTimeout,
 		Realtime:           *realtime && !liveInput,
 	})
+	opts.RequestTimeout = liveRequestTimeout(opts.RequestTimeout, liveInput, requestTimeoutSet)
 	if *stream {
 		events, err := streamEvents(ctx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
 		if err != nil {
@@ -128,6 +131,23 @@ var errLiveStdinSampleRate = fmt.Errorf("live stdin pcm16 requires %d Hz mono PC
 
 func isLiveStdinStream(path, inputFormat string, stream bool) bool {
 	return stream && path == "-" && (inputFormat == "pcm16" || inputFormat == "raw")
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	seen := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			seen = true
+		}
+	})
+	return seen
+}
+
+func liveRequestTimeout(timeout time.Duration, liveInput, timeoutSet bool) time.Duration {
+	if liveInput && !timeoutSet {
+		return 0
+	}
+	return timeout
 }
 
 func streamEvents(ctx context.Context, svc transcription.Service, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
 	"github.com/WEIFENG2333/voxgate/internal/transcription"
@@ -115,6 +116,18 @@ func TestIsLiveStdinStream(t *testing.T) {
 				t.Fatalf("isLiveStdinStream() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLiveRequestTimeout(t *testing.T) {
+	if got := liveRequestTimeout(10*time.Minute, true, false); got != 0 {
+		t.Fatalf("live default timeout = %v, want disabled", got)
+	}
+	if got := liveRequestTimeout(30*time.Second, true, true); got != 30*time.Second {
+		t.Fatalf("live explicit timeout = %v, want 30s", got)
+	}
+	if got := liveRequestTimeout(10*time.Minute, false, false); got != 10*time.Minute {
+		t.Fatalf("file timeout = %v, want 10m", got)
 	}
 }
 

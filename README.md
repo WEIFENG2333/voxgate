@@ -197,16 +197,16 @@ Useful endpoints:
 | `/v1/audio/transcriptions` | POST multipart | OpenAI-compatible transcription |
 | `/v1/audio/translations` | POST | returns 400; translation is unsupported |
 | `/v1/models` | GET | returns `voxgate` |
-| `/v1/realtime` | WebSocket | OpenAI Realtime-style transcription subset; disabled unless `--enable-realtime` is set |
+| `/v1/realtime` | WebSocket | OpenAI Realtime-style transcription subset |
 | `/health` | GET | health check |
 | `/metrics` | GET | minimal Prometheus text |
 
 ## Realtime Transcription
 
-`voxgate` can expose an OpenAI Realtime-style WebSocket transcription endpoint:
+`voxgate` exposes an OpenAI Realtime-style WebSocket transcription endpoint:
 
 ```bash
-voxgate serve --auth-token local-token --enable-realtime
+voxgate serve --auth-token local-token
 ```
 
 Connect to:

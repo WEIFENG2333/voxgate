@@ -68,10 +68,6 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r) {
 		return
 	}
-	if !s.Config.EnableRealtime {
-		writeOpenAIError(w, http.StatusNotFound, "not_found_error", "realtime endpoint is disabled", "not_found")
-		return
-	}
 	conn, err := realtimeUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return

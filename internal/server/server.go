@@ -25,7 +25,6 @@ type Config struct {
 	MaxConcurrency    int
 	RequestTimeout    time.Duration
 	CredentialPath    string
-	EnableRealtime    bool
 	EnablePunctuation bool
 	EnableThreePass   bool
 	EnableTwoPass     bool

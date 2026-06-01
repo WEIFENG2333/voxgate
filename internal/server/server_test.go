@@ -98,7 +98,7 @@ func TestRealtimeTranscriptionWebSocketWithMockBackend(t *testing.T) {
 	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
 
@@ -160,7 +160,7 @@ func TestRealtimeTranscriptionStreamsBeforeCommit(t *testing.T) {
 	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
 
@@ -202,7 +202,7 @@ func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
 	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
 
@@ -243,7 +243,7 @@ func TestRealtimeTranscriptionRollsLongRunningItem(t *testing.T) {
 	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, EnableRealtime: true})
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
 

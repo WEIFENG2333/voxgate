@@ -316,7 +316,6 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 	authToken := fs.String("auth-token", cfg.Server.AuthToken, "optional bearer token")
 	maxConc := fs.Int("max-concurrency", cfg.Server.MaxConcurrency, "max concurrent requests")
 	timeout := fs.Duration("request-timeout", config.ServerRequestTimeout(cfg), "request timeout")
-	realtime := fs.Bool("enable-realtime", false, "enable /v1/realtime")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -325,7 +324,7 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 	}
 	srv := server.New(server.Config{
 		Host: *host, Port: *port, AuthToken: *authToken, MaxConcurrency: *maxConc, RequestTimeout: *timeout,
-		CredentialPath: cfg.CredentialPath, EnableRealtime: *realtime, EnablePunctuation: cfg.ASR.EnablePunctuation,
+		CredentialPath: cfg.CredentialPath, EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass: cfg.ASR.EnableThreePass, EnableTwoPass: cfg.ASR.EnableTwoPass, UserAgent: cfg.ASR.UserAgent,
 	})
 	if !g.quiet {
@@ -347,6 +346,7 @@ func logStartup(g globalFlags, addr string) {
 			"url":   baseURL,
 			"endpoints": []string{
 				baseURL + "/v1/audio/transcriptions",
+				baseURL + "/v1/realtime",
 				baseURL + "/v1/models",
 				baseURL + "/health",
 			},
@@ -354,7 +354,7 @@ func logStartup(g globalFlags, addr string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "voxgate serving %s\n", baseURL)
-	fmt.Fprintf(os.Stderr, "endpoints: %s/v1/audio/transcriptions %s/v1/models %s/health\n", baseURL, baseURL, baseURL)
+	fmt.Fprintf(os.Stderr, "endpoints: %s/v1/audio/transcriptions %s/v1/realtime %s/v1/models %s/health\n", baseURL, baseURL, baseURL, baseURL)
 }
 
 func doctor(cfg config.Config) int {

@@ -315,6 +315,8 @@ server:
 
 Environment variables use the `VOXGATE_*` prefix, for example `VOXGATE_CREDENTIAL_PATH` and `VOXGATE_SERVER_AUTH_TOKEN`.
 
+Logging is intended for local debugging and troubleshooting. By default the server writes concise text logs for completed requests and failures. Use `-v` or `--log-level debug` to include realtime item lifecycle details, `--json-logs` for structured logs, and `-q` to keep only errors.
+
 ## Development
 
 ```bash

@@ -329,6 +329,7 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 		Host: *host, Port: *port, AuthToken: *authToken, MaxConcurrency: *maxConc, RequestTimeout: *timeout,
 		CredentialPath: cfg.CredentialPath, EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass: cfg.ASR.EnableThreePass, EnableTwoPass: cfg.ASR.EnableTwoPass, UserAgent: cfg.ASR.UserAgent,
+		LogLevel: cfg.LogLevel, JSONLogs: g.jsonLogs, Quiet: g.quiet,
 	})
 	if !g.quiet {
 		logStartup(g, srv.Addr())

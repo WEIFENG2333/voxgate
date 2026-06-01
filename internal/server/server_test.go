@@ -232,17 +232,13 @@ func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
 }
 
 func TestRealtimeTranscriptionRollsLongRunningItem(t *testing.T) {
-	oldMax := realtimeMaxItemDuration
-	realtimeMaxItemDuration = 50 * time.Millisecond
-	defer func() { realtimeMaxItemDuration = oldMax }()
-
 	wsURL, closeWS := mockASRServer(t, "滚动完成")
 	defer closeWS()
 	credPath := filepath.Join(t.TempDir(), "creds.json")
 	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second, RealtimeMaxItemDuration: 50 * time.Millisecond})
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
 

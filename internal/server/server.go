@@ -22,21 +22,22 @@ import (
 )
 
 type Config struct {
-	Host              string
-	Port              int
-	AuthToken         string
-	MaxConcurrency    int
-	RequestTimeout    time.Duration
-	CredentialPath    string
-	EnablePunctuation bool
-	EnableThreePass   bool
-	EnableTwoPass     bool
-	UserAgent         string
-	WebSocketURL      string
-	LogLevel          string
-	JSONLogs          bool
-	Quiet             bool
-	TraceWriter       io.Writer
+	Host                    string
+	Port                    int
+	AuthToken               string
+	MaxConcurrency          int
+	RequestTimeout          time.Duration
+	CredentialPath          string
+	EnablePunctuation       bool
+	EnableThreePass         bool
+	EnableTwoPass           bool
+	UserAgent               string
+	WebSocketURL            string
+	LogLevel                string
+	JSONLogs                bool
+	Quiet                   bool
+	TraceWriter             io.Writer
+	RealtimeMaxItemDuration time.Duration
 }
 
 type Server struct {
@@ -51,6 +52,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 10 * time.Minute
+	}
+	if cfg.RealtimeMaxItemDuration <= 0 {
+		cfg.RealtimeMaxItemDuration = 5 * time.Minute
 	}
 	if !cfg.EnablePunctuation && !cfg.EnableThreePass && !cfg.EnableTwoPass {
 		cfg.EnablePunctuation = true

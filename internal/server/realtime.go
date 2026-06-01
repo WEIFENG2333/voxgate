@@ -24,8 +24,6 @@ var realtimeUpgrader = websocket.Upgrader{
 
 const realtimeMaxBufferedAudio = audio.SampleRate * audio.Channels * 2 * 30
 
-var realtimeMaxItemDuration = 5 * time.Minute
-
 // Zero means append never waits in the WebSocket control loop; a full source
 // rolls to a new upstream item instead of delaying later control events.
 var realtimeAppendTimeout time.Duration
@@ -151,7 +149,7 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 		if !ok {
 			return current
 		}
-		if current != nil && current.started && time.Since(current.created) >= realtimeMaxItemDuration {
+		if current != nil && current.started && time.Since(current.created) >= s.Config.RealtimeMaxItemDuration {
 			s.log.Debug("realtime item rolled by age", "session_id", sessionID, "item_id", current.id, "age_ms", time.Since(current.created).Milliseconds())
 			current.source.CloseWrite()
 			current = nil

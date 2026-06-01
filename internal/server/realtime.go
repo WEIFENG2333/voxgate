@@ -72,6 +72,8 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	s.metrics.openRealtimeConn()
+	defer s.metrics.closeRealtimeConn()
 	defer conn.Close()
 	s.handleRealtimeConn(r.Context(), &realtimeWriter{conn: conn})
 }
@@ -121,23 +123,27 @@ func readRealtimeMessages(conn *websocket.Conn, out chan<- realtimeReadResult) {
 
 func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWriter, read realtimeReadResult, sessionID string, current *realtimeItem, itemIndex *int, itemDoneCh chan<- string) *realtimeItem {
 	if read.messageType != websocket.TextMessage {
+		s.metrics.realtimeError("unsupported_message_type")
 		_ = writeRealtimeError(rw, "", "invalid_request_error", "only JSON text events are supported", "unsupported_message_type")
 		return current
 	}
 	var ev realtimeClientEvent
 	if err := json.Unmarshal(read.data, &ev); err != nil {
+		s.metrics.realtimeError("invalid_json")
 		_ = writeRealtimeError(rw, "", "invalid_request_error", "invalid JSON event", "invalid_json")
 		return current
 	}
+	s.metrics.realtimeEvent("client", ev.Type)
 	switch ev.Type {
 	case "session.update":
+		s.metrics.realtimeEvent("server", "session.updated")
 		_ = writeRealtimeJSON(rw, map[string]any{
 			"type":     "session.updated",
 			"event_id": newRealtimeEventID(),
 			"session":  realtimeSessionObject(sessionID),
 		})
 	case "input_audio_buffer.append":
-		pcm, ok := decodeRealtimeAudio(rw, ev)
+		pcm, ok := decodeRealtimeAudio(rw, ev, s.metrics)
 		if !ok {
 			return current
 		}
@@ -149,6 +155,7 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 		current.started = true
 		if err := writeRealtimePCM(ctx, current.source, pcm); err != nil {
 			if !isRealtimeAppendRecoverable(err) {
+				s.metrics.realtimeError("audio_buffer_closed")
 				_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", err.Error(), "audio_buffer_closed")
 				return current
 			}
@@ -156,6 +163,7 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 			current = s.ensureRealtimeItem(ctx, rw, nil, itemIndex, itemDoneCh)
 			current.started = true
 			if retryErr := writeRealtimePCM(ctx, current.source, pcm); retryErr != nil {
+				s.metrics.realtimeError("audio_buffer_closed")
 				_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", retryErr.Error(), "audio_buffer_closed")
 			}
 		}
@@ -164,15 +172,18 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 			current.source.CloseWrite()
 			current = nil
 		}
+		s.metrics.realtimeEvent("server", "input_audio_buffer.cleared")
 		_ = writeRealtimeJSON(rw, map[string]any{"type": "input_audio_buffer.cleared", "event_id": newRealtimeEventID()})
 	case "input_audio_buffer.commit":
 		if current == nil || !current.started {
+			s.metrics.realtimeError("empty_audio_buffer")
 			_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", "input audio buffer is empty", "empty_audio_buffer")
 			return current
 		}
 		itemID := current.id
 		current.source.CloseWrite()
 		current = nil
+		s.metrics.realtimeEvent("server", "input_audio_buffer.committed")
 		_ = writeRealtimeJSON(rw, map[string]any{
 			"type":             "input_audio_buffer.committed",
 			"event_id":         newRealtimeEventID(),
@@ -180,18 +191,21 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 			"previous_item_id": nil,
 		})
 	default:
+		s.metrics.realtimeError("unsupported_event")
 		_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", fmt.Sprintf("unsupported realtime event %q", ev.Type), "unsupported_event")
 	}
 	return current
 }
 
-func decodeRealtimeAudio(rw *realtimeWriter, ev realtimeClientEvent) ([]byte, bool) {
+func decodeRealtimeAudio(rw *realtimeWriter, ev realtimeClientEvent, metrics *metricsRegistry) ([]byte, bool) {
 	if ev.Audio == "" {
+		metrics.realtimeError("missing_audio")
 		_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", "audio is required", "missing_audio")
 		return nil, false
 	}
 	pcm, err := base64.StdEncoding.DecodeString(ev.Audio)
 	if err != nil {
+		metrics.realtimeError("invalid_audio")
 		_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", "audio must be base64 encoded PCM16", "invalid_audio")
 		return nil, false
 	}
@@ -218,6 +232,7 @@ func (s *Server) ensureRealtimeItem(ctx context.Context, rw *realtimeWriter, cur
 	itemID := fmt.Sprintf("item_%06d", *itemIndex)
 	(*itemIndex)++
 	item := &realtimeItem{id: itemID, source: audio.NewLiveSourceWithMaxBuffer(realtimeMaxBufferedAudio), created: time.Now()}
+	s.metrics.newRealtimeItem()
 	go s.transcribeRealtimeLive(ctx, rw, item.id, item.source, itemDoneCh)
 	return item
 }
@@ -235,11 +250,13 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 	opts := svc.Options(transcription.OptionInput{RequestTimeout: s.Config.RequestTimeout, Realtime: true})
 	events, err := svc.StreamFrames(reqCtx, src, opts)
 	if err != nil {
+		s.metrics.realtimeError("asr_error")
 		_ = writeRealtimeTranscriptionFailed(rw, itemID, err)
 		return
 	}
 	for ev := range events {
 		if ev.Type == asr.EventTranscriptDelta {
+			s.metrics.realtimeEvent("server", "conversation.item.input_audio_transcription.delta")
 			_ = writeRealtimeJSON(rw, map[string]any{
 				"type":          "conversation.item.input_audio_transcription.delta",
 				"event_id":      newRealtimeEventID(),
@@ -249,6 +266,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 			})
 		}
 		if ev.Type == asr.EventTranscriptDone {
+			s.metrics.realtimeEvent("server", "conversation.item.input_audio_transcription.completed")
 			_ = writeRealtimeJSON(rw, map[string]any{
 				"type":          "conversation.item.input_audio_transcription.completed",
 				"event_id":      newRealtimeEventID(),
@@ -258,6 +276,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 			})
 		}
 		if ev.Type == asr.EventError && ev.Error != nil {
+			s.metrics.realtimeError("asr_error")
 			_ = writeRealtimeTranscriptionFailed(rw, itemID, fmt.Errorf("%s", ev.Error.Message))
 		}
 	}

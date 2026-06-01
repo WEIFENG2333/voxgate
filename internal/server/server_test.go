@@ -316,6 +316,30 @@ func TestHealthRequiresGET(t *testing.T) {
 	}
 }
 
+func TestMetricsExposeHTTPAndRealtimeSignals(t *testing.T) {
+	srv := New(Config{})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"voxgate_up 1",
+		`voxgate_http_requests_total{route="/health",method="GET",code="200"} 1`,
+		`voxgate_http_request_duration_seconds_count{route="/health",method="GET"} 1`,
+		"voxgate_http_in_flight",
+		"voxgate_realtime_connections_active 0",
+		"voxgate_realtime_events_total",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q in:\n%s", want, body)
+		}
+	}
+}
+
 func mockASRServer(t *testing.T, finalText string) (string, func()) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,8 +35,9 @@ type Config struct {
 }
 
 type Server struct {
-	Config Config
-	sem    chan struct{}
+	Config  Config
+	sem     chan struct{}
+	metrics *metricsRegistry
 }
 
 func New(cfg Config) *Server {
@@ -49,18 +52,18 @@ func New(cfg Config) *Server {
 		cfg.EnableThreePass = true
 		cfg.EnableTwoPass = true
 	}
-	return &Server{Config: cfg, sem: make(chan struct{}, cfg.MaxConcurrency)}
+	return &Server{Config: cfg, sem: make(chan struct{}, cfg.MaxConcurrency), metrics: newMetricsRegistry()}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.health)
-	mux.HandleFunc("/metrics", s.metrics)
+	mux.HandleFunc("/metrics", s.metricsHandler)
 	mux.HandleFunc("/v1/models", s.models)
 	mux.HandleFunc("/v1/audio/translations", s.translations)
 	mux.HandleFunc("/v1/audio/transcriptions", s.transcriptions)
 	mux.HandleFunc("/v1/realtime", s.realtime)
-	return s.withCORS(mux)
+	return s.withMetrics(s.withCORS(mux))
 }
 
 func (s *Server) Addr() string {
@@ -74,12 +77,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = fmt.Fprintln(w, "voxgate_up 1")
+	s.metrics.writePrometheus(w)
 }
 
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +239,60 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) withMetrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w}
+		done := s.metrics.beginHTTP(routeFor(r.URL.Path), r.Method)
+		defer func() { done(rec.status) }()
+		next.ServeHTTP(rec, r)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if r.status == 0 {
+		r.status = status
+	}
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(p)
+}
+
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	if r.status == 0 {
+		r.status = http.StatusSwitchingProtocols
+	}
+	return hijacker.Hijack()
+}
+
+func routeFor(path string) string {
+	switch path {
+	case "/health", "/metrics", "/v1/models", "/v1/audio/translations", "/v1/audio/transcriptions", "/v1/realtime":
+		return path
+	default:
+		return "other"
+	}
 }
 
 func writeTemp(file multipart.File, header *multipart.FileHeader) (string, error) {

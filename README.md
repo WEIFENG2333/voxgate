@@ -209,7 +209,12 @@ Useful endpoints:
 | `/v1/models` | GET | returns `voxgate` |
 | `/v1/realtime` | WebSocket | OpenAI Realtime-style transcription subset |
 | `/health` | GET | health check |
-| `/metrics` | GET | minimal Prometheus text |
+| `/metrics` | GET | Prometheus text metrics |
+
+`/metrics` exposes low-cardinality operational signals for local dashboards and incident debugging:
+
+- HTTP request count, status codes, in-flight requests, and duration buckets by route.
+- Realtime active connections, opened connections, upstream ASR items, event counts, and error codes.
 
 ## Realtime Transcription
 

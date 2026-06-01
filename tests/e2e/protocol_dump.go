@@ -26,6 +26,8 @@ func main() {
 	audioPath := flag.String("audio", "tests/audio/zh_5s.wav", "audio file to send")
 	credentialPath := flag.String("credential-path", "", "credential cache path")
 	maxFrames := flag.Int("max-frames", 0, "limit audio frames; 0 sends the whole file")
+	probeContinuation := flag.Bool("probe-continuation", false, "send two utterances in one session without FinishSession between them")
+	silenceFrames := flag.Int("silence-frames", 150, "silence frames after each utterance for continuation probe")
 	flag.Parse()
 
 	if *credentialPath == "" {
@@ -109,43 +111,58 @@ func main() {
 
 	timestamp := time.Now().UnixMilli()
 	frameIndex := 0
-	for {
-		if *maxFrames > 0 && frameIndex >= *maxFrames {
-			break
-		}
-		pcm, ok, err := src.NextFrame()
+	if *probeContinuation {
+		sent, err := sendSourceFrames(conn, enc, src.Clone(), requestID, timestamp, frameIndex, *maxFrames, true)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if !ok {
-			break
-		}
-		opusFrame, err := enc.EncodePCMFrame(pcm)
+		frameIndex += sent
+		sent, err = sendSilenceFrames(conn, enc, requestID, timestamp, frameIndex, *silenceFrames, asrproto.FrameStateMiddle)
 		if err != nil {
 			log.Fatal(err)
 		}
-		state := asrproto.FrameStateMiddle
-		if frameIndex == 0 {
-			state = asrproto.FrameStateFirst
+		frameIndex += sent
+		emit("continuation.first_audio_sent", map[string]any{"frames_total": frameIndex})
+		first, err := readUntilFinal(conn, "continuation.first")
+		if err != nil {
+			emit("continuation.first.error", map[string]any{"error": err.Error()})
+			return
 		}
-		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		req := asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}
-		if frameIndex < 3 || frameIndex%100 == 0 {
-			emit("TaskRequest.request", requestSummary(req))
+		emit("continuation.first.final", map[string]any{"text": first})
+
+		sent, err = sendSourceFrames(conn, enc, src.Clone(), requestID, timestamp, frameIndex, *maxFrames, false)
+		if err != nil {
+			emit("continuation.second_send.error", map[string]any{"error": err.Error()})
+			return
 		}
-		if err := conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalRequest(req)); err != nil {
-			log.Fatal(err)
+		frameIndex += sent
+		sent, err = sendSilenceFrames(conn, enc, requestID, timestamp, frameIndex, *silenceFrames, asrproto.FrameStateMiddle)
+		if err != nil {
+			emit("continuation.second_silence.error", map[string]any{"error": err.Error()})
+			return
 		}
-		frameIndex++
+		frameIndex += sent
+		emit("continuation.second_audio_sent", map[string]any{"frames_total": frameIndex})
+		second, err := readUntilFinal(conn, "continuation.second")
+		if err != nil {
+			emit("continuation.second.error", map[string]any{"error": err.Error()})
+			return
+		}
+		emit("continuation.second.final", map[string]any{"text": second})
+		send(conn, "FinishSession", asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
+		emit("probe.done", map[string]any{"mode": "continuation", "frames": frameIndex})
+		return
 	}
+	sent, err := sendSourceFrames(conn, enc, src, requestID, timestamp, frameIndex, *maxFrames, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+	frameIndex += sent
 	if frameIndex > 0 {
-		silence := make([]byte, audio.BytesPerFrame)
-		opusFrame, err := enc.EncodePCMFrame(silence)
+		_, err := sendSilenceFrames(conn, enc, requestID, timestamp, frameIndex, 1, asrproto.FrameStateLast)
 		if err != nil {
 			log.Fatal(err)
 		}
-		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		send(conn, "TaskRequest.last", asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast})
 	}
 	send(conn, "FinishSession", asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
 	emit("audio.sent", map[string]any{"frames": frameIndex, "duration_seconds": src.Duration().Seconds()})
@@ -161,6 +178,101 @@ func main() {
 			return
 		}
 	}
+}
+
+func sendSourceFrames(conn *websocket.Conn, enc *audio.OpusEncoder, src *audio.Source, requestID string, timestamp int64, startFrame, maxFrames int, first bool) (int, error) {
+	sent := 0
+	for {
+		if maxFrames > 0 && sent >= maxFrames {
+			break
+		}
+		pcm, ok, err := src.NextFrame()
+		if err != nil {
+			return sent, err
+		}
+		if !ok {
+			break
+		}
+		state := asrproto.FrameStateMiddle
+		if first && sent == 0 {
+			state = asrproto.FrameStateFirst
+		}
+		if err := sendPCMFrame(conn, enc, requestID, timestamp, startFrame+sent, pcm, state); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
+}
+
+func sendSilenceFrames(conn *websocket.Conn, enc *audio.OpusEncoder, requestID string, timestamp int64, startFrame, count int, state asrproto.FrameState) (int, error) {
+	for i := 0; i < count; i++ {
+		if err := sendPCMFrame(conn, enc, requestID, timestamp, startFrame+i, make([]byte, audio.BytesPerFrame), state); err != nil {
+			return i, err
+		}
+	}
+	return count, nil
+}
+
+func sendPCMFrame(conn *websocket.Conn, enc *audio.OpusEncoder, requestID string, timestamp int64, frameIndex int, pcm []byte, state asrproto.FrameState) error {
+	opusFrame, err := enc.EncodePCMFrame(pcm)
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
+	req := asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}
+	if frameIndex < 3 || frameIndex%100 == 0 || state == asrproto.FrameStateLast {
+		emit("TaskRequest.request", requestSummary(req))
+	}
+	return conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalRequest(req))
+}
+
+func readUntilFinal(conn *websocket.Conn, stage string) (string, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	_ = conn.SetReadDeadline(deadline)
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		resp, _, err := read(conn, stage)
+		if err != nil {
+			return "", err
+		}
+		if resp.MessageType == "SessionFinished" || resp.MessageType == "TaskFailed" || resp.MessageType == "SessionFailed" {
+			return "", fmt.Errorf("unexpected %s: %s", resp.MessageType, resp.StatusMessage)
+		}
+		text, final := finalText(resp.ResultJSON)
+		if final {
+			return text, nil
+		}
+	}
+}
+
+func finalText(resultJSON string) (string, bool) {
+	var r struct {
+		Results []struct {
+			Text          string `json:"text"`
+			IsInterim     *bool  `json:"is_interim"`
+			IsVADFinished bool   `json:"is_vad_finished"`
+			Extra         struct {
+				NonstreamResult bool `json:"nonstream_result"`
+			} `json:"extra"`
+		} `json:"results"`
+	}
+	if resultJSON == "" || json.Unmarshal([]byte(resultJSON), &r) != nil {
+		return "", false
+	}
+	var text string
+	isInterim := true
+	vadFinished := false
+	nonstream := false
+	for _, item := range r.Results {
+		text += item.Text
+		if item.IsInterim != nil {
+			isInterim = *item.IsInterim
+		}
+		vadFinished = item.IsVADFinished
+		nonstream = item.Extra.NonstreamResult
+	}
+	return text, text != "" && (nonstream || (!isInterim && vadFinished))
 }
 
 func send(conn *websocket.Conn, stage string, req asrproto.Request) {

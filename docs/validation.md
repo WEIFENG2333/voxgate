@@ -17,7 +17,7 @@ Passed packages:
 
 - protobuf byte encoding/decoding
 - response JSON parser
-- VAD reset aggregator
+- upstream utterance final handling
 - Opus frame encoding
 - ffmpeg PCM frame source
 - output format timestamps

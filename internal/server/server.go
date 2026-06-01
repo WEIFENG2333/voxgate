@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -35,6 +36,7 @@ type Config struct {
 	LogLevel          string
 	JSONLogs          bool
 	Quiet             bool
+	TraceWriter       io.Writer
 }
 
 type Server struct {
@@ -111,16 +113,20 @@ func (s *Server) translations(w http.ResponseWriter, r *http.Request) {
 func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	requestID := "req_" + uuid.NewString()
 	start := time.Now()
-	fail := func(status int, typ, message, code string) {
+	fail := func(status int, typ, message, code string, cause error) {
+		logMessage := message
+		if cause != nil {
+			logMessage = cause.Error()
+		}
 		if status >= 500 {
-			s.log.Error("transcription failed", "request_id", requestID, "status", status, "code", code, "error", message, "duration_ms", time.Since(start).Milliseconds())
+			s.log.Error("transcription failed", "request_id", requestID, "status", status, "code", code, "error", logMessage, "duration_ms", time.Since(start).Milliseconds())
 		} else {
-			s.log.Warn("transcription rejected", "request_id", requestID, "status", status, "code", code, "error", message)
+			s.log.Warn("transcription rejected", "request_id", requestID, "status", status, "code", code, "error", logMessage)
 		}
 		writeOpenAIError(w, status, typ, message, code)
 	}
 	if r.Method != http.MethodPost {
-		fail(http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed", "method_not_allowed")
+		fail(http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed", "method_not_allowed", nil)
 		return
 	}
 	if !s.authorize(w, r) {
@@ -131,27 +137,27 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	default:
-		fail(http.StatusTooManyRequests, "rate_limit_error", "too many concurrent transcription requests", "concurrency_exceeded")
+		fail(http.StatusTooManyRequests, "rate_limit_error", "too many concurrent transcription requests", "concurrency_exceeded", nil)
 		return
 	}
 	if err := r.ParseMultipartForm(128 << 20); err != nil {
-		fail(http.StatusBadRequest, "invalid_request_error", err.Error(), "bad_multipart")
+		fail(http.StatusBadRequest, "invalid_request_error", "invalid multipart form data", "bad_multipart", err)
 		return
 	}
 	responseFormat := formValue(r.MultipartForm, "response_format", output.JSON)
 	stream := formBool(r.MultipartForm, "stream")
 	if stream {
 		if !output.ValidStreamFormat(responseFormat) {
-			fail(http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("stream response_format %q is unsupported", responseFormat), "unsupported_response_format")
+			fail(http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("stream response_format %q is unsupported", responseFormat), "unsupported_response_format", nil)
 			return
 		}
 	} else if !output.ValidResultFormat(responseFormat) {
-		fail(http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("response_format %q is unsupported", responseFormat), "unsupported_response_format")
+		fail(http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("response_format %q is unsupported", responseFormat), "unsupported_response_format", nil)
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		fail(http.StatusBadRequest, "invalid_request_error", "missing multipart file field", "missing_file")
+		fail(http.StatusBadRequest, "invalid_request_error", "missing multipart file field", "missing_file", err)
 		return
 	}
 	defer file.Close()
@@ -162,7 +168,7 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	s.log.Debug("transcription started", "request_id", requestID, "filename", filename, "stream", stream, "format", responseFormat)
 	tmp, err := writeTemp(file, header)
 	if err != nil {
-		fail(http.StatusInternalServerError, "server_error", err.Error(), "temp_file")
+		fail(http.StatusInternalServerError, "server_error", "failed to store uploaded file", "temp_file", err)
 		return
 	}
 	defer os.Remove(tmp)
@@ -171,7 +177,7 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	svc := s.transcriptionService()
 	src, err := svc.Open(ctx, tmp, "", audio.SampleRate)
 	if err != nil {
-		fail(http.StatusBadRequest, "invalid_request_error", err.Error(), "audio_decode_failed")
+		fail(http.StatusBadRequest, "invalid_request_error", "failed to decode audio; provide a supported audio or video file", "audio_decode_failed", err)
 		return
 	}
 	opts := svc.Options(transcription.OptionInput{
@@ -182,7 +188,7 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	if stream {
 		events, err := svc.Stream(ctx, src, opts, true)
 		if err != nil {
-			fail(http.StatusInternalServerError, "server_error", err.Error(), "transcribe_failed")
+			fail(http.StatusInternalServerError, "server_error", "upstream transcription failed", "transcribe_failed", err)
 			return
 		}
 		s.streamSSE(requestID, w, events)
@@ -191,12 +197,12 @@ func (s *Server) transcriptions(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := svc.Transcribe(ctx, src, opts, true)
 	if err != nil {
-		fail(http.StatusInternalServerError, "server_error", err.Error(), "asr_error")
+		fail(http.StatusInternalServerError, "server_error", "upstream transcription failed", "asr_error", err)
 		return
 	}
 	w.Header().Set("Content-Type", contentType(responseFormat))
 	if err := output.WriteResult(w, responseFormat, result); err != nil {
-		fail(http.StatusInternalServerError, "server_error", err.Error(), "encode_failed")
+		fail(http.StatusInternalServerError, "server_error", "failed to encode transcription response", "encode_failed", err)
 		return
 	}
 	s.log.Info("transcription completed", "request_id", requestID, "duration_ms", time.Since(start).Milliseconds(), "audio_duration_s", result.Duration, "chars", len(result.Text))
@@ -211,6 +217,7 @@ func (s *Server) transcriptionService() transcription.Service {
 		EnableThreePass:   s.Config.EnableThreePass,
 		EnableTwoPass:     s.Config.EnableTwoPass,
 		RequestTimeout:    s.Config.RequestTimeout,
+		TraceWriter:       s.Config.TraceWriter,
 	})
 }
 
@@ -222,8 +229,11 @@ func (s *Server) streamSSE(requestID string, w http.ResponseWriter, events <-cha
 		if ev.Type == asr.EventTranscriptDelta {
 			writeSSE(w, "transcript.text.delta", map[string]string{"type": "transcript.text.delta", "delta": ev.Text})
 		}
-		if ev.Type == asr.EventTranscriptDone {
+		if ev.Type == asr.EventTranscriptFinal {
 			writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": ev.Text})
+		}
+		if ev.Type == asr.EventStreamDone {
+			writeSSE(w, "stream.done", map[string]string{"type": "stream.done"})
 		}
 		if ev.Type == asr.EventError && ev.Error != nil {
 			s.log.Error("transcription stream error", "request_id", requestID, "code", ev.Error.Code, "error", ev.Error.Message)
@@ -289,7 +299,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, typ, message, code string) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": typ, "code": code}})
+	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": typ, "param": nil, "code": code}})
 }
 
 func writeSSE(w http.ResponseWriter, event string, data any) {

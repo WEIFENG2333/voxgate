@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ type ClientConfig struct {
 	WebSocketURL   string
 	HTTP           *http.Client
 	Dialer         *websocket.Dialer
+	TraceWriter    io.Writer
 }
 
 type Client struct {
@@ -59,7 +61,9 @@ func (c Client) Transcribe(ctx context.Context, source PCMFrameSource, encoder P
 		events <- Event{Type: EventTaskStarted, RequestID: requestID}
 		if err := c.run(ctx, requestID, source, encoder, opts, events); err != nil {
 			events <- Event{Type: EventError, RequestID: requestID, Error: &ErrorPayload{Code: "asr_error", Message: err.Error()}}
+			return
 		}
+		events <- Event{Type: EventStreamDone, RequestID: requestID, Duration: source.Duration().Seconds()}
 	}()
 	return events, nil
 }
@@ -135,10 +139,13 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		return true, err
 	}
 	defer conn.Close()
-	if err := sendPB(conn, asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartTask", RequestID: requestID}); err != nil {
+	trace := newFrameTrace(c.Config.TraceWriter)
+	send := func(req asrproto.Request) error { return sendPBTrace(conn, trace, req) }
+	read := func() (asrproto.Response, error) { return readPBTrace(conn, trace) }
+	if err := send(asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartTask", RequestID: requestID}); err != nil {
 		return true, err
 	}
-	resp, err := readPB(conn)
+	resp, err := read()
 	if err != nil {
 		return true, err
 	}
@@ -154,10 +161,10 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 			"enable_asr_threepass": opts.EnableThreePass, "enable_asr_twopass": opts.EnableTwoPass, "input_mode": "tool",
 		},
 	})
-	if err := sendPB(conn, asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartSession", Payload: string(sessionPayload), RequestID: requestID}); err != nil {
+	if err := send(asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartSession", Payload: string(sessionPayload), RequestID: requestID}); err != nil {
 		return true, err
 	}
-	resp, err = readPB(conn)
+	resp, err = read()
 	if err != nil {
 		return true, err
 	}
@@ -173,10 +180,10 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	done := make(chan struct{})
 	finishedSending := make(chan struct{})
 	go func() {
-		sendErr <- c.sendAudio(ctx, conn, requestID, creds.Token, source, encoder, opts.Realtime)
+		sendErr <- c.sendAudio(ctx, conn, trace, requestID, creds.Token, source, encoder, opts.Realtime)
 	}()
 	go func() {
-		recvErr <- c.recv(ctx, conn, requestID, source, events, done, finishedSending)
+		recvErr <- c.recv(ctx, conn, trace, requestID, source, events, done, finishedSending)
 	}()
 	select {
 	case err := <-sendErr:
@@ -185,7 +192,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		}
 		close(finishedSending)
 		// After FinishSession the backend may close without an explicit final
-		// message. Bound the wait and let recv synthesize transcript.done.
+		// message. Bound the wait and let recv synthesize transcript.final.
 		_ = conn.SetReadDeadline(time.Now().Add(finishSessionWaitTimeout))
 		select {
 		case err := <-recvErr:
@@ -205,7 +212,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 }
 
-func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder, realtime bool) error {
+func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *frameTrace, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder, realtime bool) error {
 	timestamp := time.Now().UnixMilli()
 	frameIndex := 0
 	for {
@@ -226,7 +233,7 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, 
 		}
 		// Upstream timestamps are logical audio time, not wall-clock send time.
 		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		if err := sendPB(conn, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}); err != nil {
+		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}); err != nil {
 			return err
 		}
 		frameIndex++
@@ -248,15 +255,16 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, requestID, 
 			return err
 		}
 		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		if err := sendPB(conn, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
+		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
 			return err
 		}
 	}
-	return sendPB(conn, asrproto.Request{Token: token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
+	return sendPBTrace(conn, trace, asrproto.Request{Token: token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
 }
 
-func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
-	var agg SegmentResetAggregator
+func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrace, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
+	lastText := ""
+	finalEmitted := false
 	start := time.Now()
 	for {
 		select {
@@ -266,21 +274,27 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			return nil
 		default:
 		}
-		resp, err := readPB(conn)
+		resp, err := readPBTrace(conn, trace)
 		if err != nil {
 			select {
 			case <-finishedSending:
+				if finalEmitted {
+					return nil
+				}
 				if isTimeout(err) {
-					events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: agg.Text(), Duration: source.Duration().Seconds()}
+					events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 					return nil
 				}
 			default:
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				if agg.Text() == "" {
+				if finalEmitted {
+					return nil
+				}
+				if lastText == "" {
 					return fmt.Errorf("websocket closed normally before any transcript result")
 				}
-				events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: agg.Text(), Duration: source.Duration().Seconds()}
+				events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 				return nil
 			}
 			return err
@@ -289,8 +303,10 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 		case "TaskFailed", "SessionFailed":
 			return fmt.Errorf("%s (code=%d): %s", resp.MessageType, resp.StatusCode, resp.StatusMessage)
 		case "SessionFinished":
-			text := agg.Text()
-			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: source.Duration().Seconds()}
+			if finalEmitted {
+				return nil
+			}
+			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 			return nil
 		}
 		// Recognition payloads arrive as JSON nested inside the protobuf frame.
@@ -304,19 +320,16 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, requestID string
 			events <- Event{Type: EventVADStart, RequestID: requestID, TimestampMS: int64(time.Since(start) / time.Millisecond), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			continue
 		}
-		full, reset, seg := agg.Update(parsed.Text)
-		if reset {
-			events <- Event{Type: EventTranscriptSegment, RequestID: requestID, Text: seg.Text, SegmentIndex: seg.Index, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
-		}
+		lastText = parsed.Text
 		switch parsed.Kind {
 		case ParsedInterim:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, IsInterim: true, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, IsInterim: true, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedDefinite:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: full, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedFinal:
-			text := agg.Final(parsed.Text)
-			events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
-			return nil
+			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: parsed.Text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+			finalEmitted = true
+			lastText = ""
 		}
 	}
 }
@@ -327,17 +340,30 @@ func isTimeout(err error) bool {
 }
 
 func sendPB(conn *websocket.Conn, req asrproto.Request) error {
-	return conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalRequest(req))
+	return sendPBTrace(conn, nil, req)
 }
 
 func readPB(conn *websocket.Conn) (asrproto.Response, error) {
+	return readPBTrace(conn, nil)
+}
+
+func sendPBTrace(conn *websocket.Conn, trace *frameTrace, req asrproto.Request) error {
+	raw := asrproto.MarshalRequest(req)
+	trace.sent(req, raw)
+	return conn.WriteMessage(websocket.BinaryMessage, raw)
+}
+
+func readPBTrace(conn *websocket.Conn, trace *frameTrace) (asrproto.Response, error) {
 	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
 			return asrproto.Response{}, err
 		}
 		if mt == websocket.BinaryMessage {
-			return asrproto.UnmarshalResponse(data)
+			resp, err := asrproto.UnmarshalResponse(data)
+			trace.received(mt, data, resp, err)
+			return resp, err
 		}
+		trace.received(mt, data, asrproto.Response{}, nil)
 	}
 }

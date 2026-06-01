@@ -1,6 +1,7 @@
 package asr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -59,7 +60,7 @@ func (s *dynamicDurationSource) Duration() time.Duration {
 
 func (s *dynamicDurationSource) Close() error { return nil }
 
-func TestClientMockWebSocketThreePassWithReset(t *testing.T) {
+func TestClientStreamsMultipleFinalsInOneSession(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -76,11 +77,13 @@ func TestClientMockWebSocketThreePassWithReset(t *testing.T) {
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
 		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "今天天气真好我们出去玩", "is_interim": true}}})
+		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第一段", "is_interim": true, "index": 0}}})
 		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "明天继续", "is_interim": true}}})
+		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第一段。", "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
 		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "明天继续", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第二段", "is_interim": true, "index": 1}}})
+		_, _, _ = conn.ReadMessage()
+		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第二段。", "is_interim": false, "is_vad_finished": true, "index": 1, "extra": map[string]any{"nonstream_result": true}}}})
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 	}))
@@ -96,17 +99,23 @@ func TestClientMockWebSocketThreePassWithReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var done string
+	var finals []string
 	for ev := range events {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
-			done = ev.Text
+		if ev.Type == EventTranscriptFinal {
+			finals = append(finals, ev.Text)
 		}
 	}
-	if done != "今天天气真好我们出去玩明天继续" {
-		t.Fatalf("bad done text: %q", done)
+	want := []string{"第一段。", "第二段。"}
+	if len(finals) != len(want) {
+		t.Fatalf("finals = %#v, want %#v", finals, want)
+	}
+	for i := range want {
+		if finals[i] != want[i] {
+			t.Fatalf("finals = %#v, want %#v", finals, want)
+		}
 	}
 	_ = os.Remove(credPath)
 }
@@ -153,12 +162,62 @@ func TestClientReportsFinalDurationAfterAudioIsSent(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
+		if ev.Type == EventTranscriptFinal {
 			doneDuration = ev.Duration
 		}
 	}
 	if doneDuration != 2 {
 		t.Fatalf("done duration = %.0f, want 2", doneDuration)
+	}
+}
+
+func TestClientTraceRecordsRawWebSocketFrames(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			method, _ := parseTestRequestMethod(data)
+			if method == "FinishSession" {
+				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "完成", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := SaveCredentials(credPath, Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	var trace bytes.Buffer
+	client := Client{Config: ClientConfig{CredentialPath: credPath, WebSocketURL: "ws" + strings.TrimPrefix(srv.URL, "http"), TraceWriter: &trace}}
+	events, err := client.Transcribe(context.Background(), &fakeSource{frames: [][]byte{{0}}}, fakeEncoder{}, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ev := range events {
+		if ev.Type == EventError {
+			t.Fatalf("event error: %+v", ev.Error)
+		}
+	}
+	out := trace.String()
+	for _, want := range []string{`"direction":"send"`, `"direction":"recv"`, `"raw_base64":`, `"method_name":"StartTask"`, `"message_type":"TaskStarted"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("trace missing %s:\n%s", want, out)
+		}
 	}
 }
 
@@ -207,7 +266,7 @@ func TestClientFinishesEmptyResultAfterFinishSessionTimeout(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
+		if ev.Type == EventTranscriptFinal {
 			doneSeen = true
 			if ev.Text != "" {
 				t.Fatalf("done text = %q, want empty", ev.Text)
@@ -276,7 +335,7 @@ func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
+		if ev.Type == EventTranscriptFinal {
 			done = ev.Text
 		}
 	}
@@ -365,7 +424,7 @@ func TestClientReissuesDeviceAfterRepeatedHandshakeFailure(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
+		if ev.Type == EventTranscriptFinal {
 			done = ev.Text
 		}
 	}

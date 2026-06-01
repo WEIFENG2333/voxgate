@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -227,7 +226,7 @@ func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := readRealtimeCompleted(t, conn)
-	if second["item_id"] != "item_000001" || second["transcript"] != "第二段" {
+	if second["item_id"] != "item_000000" || second["transcript"] != "第二段" {
 		t.Fatalf("second completed event = %v", second)
 	}
 }
@@ -306,6 +305,34 @@ func TestTranscriptionsRejectsSubtitleStreamFormat(t *testing.T) {
 	}
 }
 
+func TestTranscriptionsDecodeErrorIsStableOpenAIError(t *testing.T) {
+	srv := New(Config{RequestTimeout: 10 * time.Second})
+	body, contentType := multipartBody(t, "bad.wav", []byte("not an audio file"))
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if got.Error.Code != "audio_decode_failed" || got.Error.Type != "invalid_request_error" {
+		t.Fatalf("bad error shape: %+v body=%s", got.Error, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "ffmpeg") {
+		t.Fatalf("response leaked decoder internals: %s", rec.Body.String())
+	}
+}
+
 func TestHealthRequiresGET(t *testing.T) {
 	srv := New(Config{})
 	req := httptest.NewRequest(http.MethodPost, "/health", nil)
@@ -378,7 +405,6 @@ func mockASRStreamingServer(t *testing.T) (string, func()) {
 
 func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func()) {
 	t.Helper()
-	var connections atomic.Int32
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -387,10 +413,7 @@ func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func(
 			return
 		}
 		defer conn.Close()
-		index := int(connections.Add(1)) - 1
-		if index >= len(finalTexts) {
-			index = len(finalTexts) - 1
-		}
+		index := 0
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
 		_, _, _ = conn.ReadMessage()
@@ -402,9 +425,12 @@ func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func(
 			}
 			req, _ := parseRequestMethod(data)
 			if req == "TaskRequest" {
+				if index >= len(finalTexts) {
+					index = len(finalTexts) - 1
+				}
 				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": finalTexts[index], "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
 				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
-				return
+				index++
 			}
 		}
 	}))

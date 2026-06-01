@@ -5,31 +5,31 @@ import "time"
 type EventType string
 
 const (
-	EventTaskStarted       EventType = "task.started"
-	EventSessionStarted    EventType = "session.started"
-	EventVADStart          EventType = "vad.start"
-	EventTranscriptDelta   EventType = "transcript.delta"
-	EventTranscriptSegment EventType = "transcript.segment"
-	EventTranscriptDone    EventType = "transcript.done"
-	EventError             EventType = "error"
+	EventTaskStarted     EventType = "task.started"
+	EventSessionStarted  EventType = "session.started"
+	EventVADStart        EventType = "vad.start"
+	EventTranscriptDelta EventType = "transcript.delta"
+	EventTranscriptFinal EventType = "transcript.final"
+	EventStreamDone      EventType = "stream.done"
+	EventError           EventType = "error"
 )
 
 // Event is the internal streaming envelope used by the CLI, SSE endpoint, and
-// Realtime compatibility layer. Text is cumulative for transcript delta events.
+// Realtime compatibility layer. Transcript final means one utterance is stable;
+// stream done means the input source has ended.
 type Event struct {
-	Type         EventType      `json:"type"`
-	RequestID    string         `json:"request_id,omitempty"`
-	Text         string         `json:"text,omitempty"`
-	IsInterim    bool           `json:"is_interim,omitempty"`
-	SegmentIndex int            `json:"segment_index,omitempty"`
-	Start        float64        `json:"start,omitempty"`
-	End          float64        `json:"end,omitempty"`
-	Duration     float64        `json:"duration,omitempty"`
-	TimestampMS  int64          `json:"timestamp_ms,omitempty"`
-	Error        *ErrorPayload  `json:"error,omitempty"`
-	Results      []ASRResult    `json:"results,omitempty"`
-	Extra        *ASRExtra      `json:"extra,omitempty"`
-	Raw          map[string]any `json:"-"`
+	Type        EventType      `json:"type"`
+	RequestID   string         `json:"request_id,omitempty"`
+	Text        string         `json:"text,omitempty"`
+	IsInterim   bool           `json:"is_interim,omitempty"`
+	Start       float64        `json:"start,omitempty"`
+	End         float64        `json:"end,omitempty"`
+	Duration    float64        `json:"duration,omitempty"`
+	TimestampMS int64          `json:"timestamp_ms,omitempty"`
+	Error       *ErrorPayload  `json:"error,omitempty"`
+	Results     []ASRResult    `json:"results,omitempty"`
+	Extra       *ASRExtra      `json:"extra,omitempty"`
+	Raw         map[string]any `json:"-"`
 }
 
 type ErrorPayload struct {
@@ -84,9 +84,9 @@ type ASRResult struct {
 	End           float64       `json:"end_time,omitempty"`
 	Confidence    float64       `json:"confidence,omitempty"`
 	Alternatives  []Alternative `json:"alternatives,omitempty"`
-	IsInterim     bool          `json:"is_interim,omitempty"`
+	IsInterim     bool          `json:"is_interim"`
 	IsVADFinished bool          `json:"is_vad_finished,omitempty"`
-	Index         int           `json:"index,omitempty"`
+	Index         int           `json:"index"`
 }
 
 type ASRExtra struct {

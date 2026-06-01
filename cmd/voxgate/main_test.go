@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -102,5 +103,37 @@ func TestStreamEventsRejectsLiveStdinSampleRate(t *testing.T) {
 	_, err := streamEvents(context.Background(), transcription.Service{}, "-", "pcm16", 8000, asr.Options{}, true, true)
 	if !errors.Is(err, errLiveStdinSampleRate) {
 		t.Fatalf("streamEvents error = %v, want errLiveStdinSampleRate", err)
+	}
+}
+
+func TestWriteTextStreamEventsPipeWritesFinalLinesOnly(t *testing.T) {
+	events := make(chan asr.Event, 3)
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你"}
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好"}
+	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "你好。"}
+	close(events)
+
+	var buf bytes.Buffer
+	if got := writeTextStreamEvents(&buf, events, false); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	if got, want := buf.String(), "你好。\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestWriteTextStreamEventsInteractiveRewritesInterimLine(t *testing.T) {
+	events := make(chan asr.Event, 3)
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好啊"}
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好"}
+	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "你好。"}
+	close(events)
+
+	var buf bytes.Buffer
+	if got := writeTextStreamEvents(&buf, events, true); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	if got, want := buf.String(), "\r你好啊\r你好   \r你好。\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }

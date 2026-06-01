@@ -87,17 +87,70 @@ func TestTranscribeChunksSkipsMinimumEmptyChunk(t *testing.T) {
 	}
 }
 
+func TestStreamChunksAggregatesFinalsAndSuppressesChunkDone(t *testing.T) {
+	src := silentSource(120 * time.Second)
+	client := &scriptedStreamClient{events: [][]asr.Event{
+		{
+			{Type: asr.EventTranscriptDelta, Text: "a"},
+			{Type: asr.EventTranscriptFinal, Text: "甲"},
+			{Type: asr.EventStreamDone},
+		},
+		{
+			{Type: asr.EventTranscriptFinal, Text: "乙"},
+			{Type: asr.EventTranscriptFinal, Text: "丙"},
+			{Type: asr.EventStreamDone},
+		},
+	}}
+	out := make(chan asr.Event, 8)
+
+	Runner{Config: Config{ChunkDuration: 60 * time.Second}}.streamChunks(context.Background(), out, client, src.Chunks(60*time.Second), asr.Options{})
+
+	var got []asr.Event
+	for ev := range out {
+		got = append(got, ev)
+	}
+	if len(got) != 3 {
+		t.Fatalf("events = %#v, want 3 events", got)
+	}
+	if got[0].Type != asr.EventTranscriptDelta || got[0].Text != "a" {
+		t.Fatalf("first event = %#v, want delta a", got[0])
+	}
+	if got[1].Type != asr.EventTranscriptFinal || got[1].Text != "甲乙丙" {
+		t.Fatalf("final event = %#v, want aggregated final", got[1])
+	}
+	if got[2].Type != asr.EventStreamDone {
+		t.Fatalf("last event = %#v, want stream.done", got[2])
+	}
+}
+
 type fakeStreamClient struct {
 	emptyAbove time.Duration
 }
 
 func (f fakeStreamClient) Transcribe(_ context.Context, src asr.PCMFrameSource, _ asr.PCMFrameEncoder, _ asr.Options) (<-chan asr.Event, error) {
-	events := make(chan asr.Event, 1)
+	events := make(chan asr.Event, 4)
 	if f.emptyAbove == 0 || src.Duration() > f.emptyAbove {
 		close(events)
 		return events, nil
 	}
-	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "part", Duration: src.Duration().Seconds()}
+	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "part", Duration: src.Duration().Seconds()}
+	close(events)
+	return events, nil
+}
+
+type scriptedStreamClient struct {
+	events [][]asr.Event
+	calls  int
+}
+
+func (s *scriptedStreamClient) Transcribe(_ context.Context, _ asr.PCMFrameSource, _ asr.PCMFrameEncoder, _ asr.Options) (<-chan asr.Event, error) {
+	events := make(chan asr.Event, 4)
+	if s.calls < len(s.events) {
+		for _, ev := range s.events[s.calls] {
+			events <- ev
+		}
+	}
+	s.calls++
 	close(events)
 	return events, nil
 }

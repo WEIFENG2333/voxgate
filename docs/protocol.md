@@ -182,18 +182,12 @@ Mapping:
 - `is_interim=false` without final marker -> definite/two-pass delta
 - `extra.nonstream_result=true` or `!is_interim && is_vad_finished` -> final/three-pass result
 
-## VAD Segment Reset
+## Utterance Boundaries
 
-Long audio may reset text at a new VAD segment. The Python reference loses earlier text because it replaces the final text with the new short segment. The Rust reference preserves previous segments with this heuristic:
-
-```text
-if previous segment text is non-empty
-and current text length < previous length / 2
-and previous does not start with current
-then append previous text to confirmed_text
-```
-
-`voxgate` implements the same heuristic in `internal/asr/aggregator.go` and covers it with unit and mock WebSocket integration tests.
+The upstream result payload exposes utterance boundaries directly:
+`is_vad_finished=true` marks a finalized utterance and `index` increments for
+later utterances in the same WebSocket session. `voxgate` maps that final result
+to `transcript.final` and keeps the session open until the input source ends.
 
 ## Go State Machine
 
@@ -223,8 +217,8 @@ Long-file batch flow:
 - Token cache and config priority tests
 - Opus frame encode test
 - Timestamp formatting tests for SRT/VTT
-- VAD reset boundary tests
-- Mock WebSocket three-pass flow with reset
+- Utterance final and stream end tests
+- Mock WebSocket three-pass flow
 - HTTP server JSON/SSE tests with a mock WebSocket backend
 - CLI command-surface tests for help and early format validation
 - Real endpoint e2e scripts are included but require network access and a working non-public endpoint
@@ -235,5 +229,5 @@ Until the unanswered limits above are measured more thoroughly, `voxgate` should
 
 - CLI and HTTP file transcription transparently chunk long inputs.
 - Realtime mode remains single-session and bounded by backend behavior.
-- Tests should lock down chunk stitching, VAD reset preservation, and empty-normal-close failure handling.
+- Tests should lock down chunk stitching, multi-utterance final handling, and empty-normal-close failure handling.
 - E2E validation should report the chosen chunk size, total audio duration, elapsed wall time, and whether every chunk produced non-empty text.

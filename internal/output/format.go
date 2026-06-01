@@ -62,7 +62,7 @@ func WriteResult(w io.Writer, format string, result asr.Result) error {
 		_, _ = fmt.Fprint(w, "WEBVTT\n\n")
 		return writeCues(w, result, true)
 	case NDJSON:
-		return json.NewEncoder(w).Encode(asr.Event{Type: asr.EventTranscriptDone, Text: result.Text, Duration: result.Duration})
+		return json.NewEncoder(w).Encode(asr.Event{Type: asr.EventTranscriptFinal, Text: result.Text, Duration: result.Duration})
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
@@ -73,7 +73,7 @@ func WriteEvent(w io.Writer, format string, event asr.Event) error {
 	case NDJSON, JSON, VerboseJSON:
 		return json.NewEncoder(w).Encode(event)
 	case Text:
-		if event.Type == asr.EventTranscriptDelta || event.Type == asr.EventTranscriptDone {
+		if event.Type == asr.EventTranscriptDelta || event.Type == asr.EventTranscriptFinal {
 			_, err := fmt.Fprint(w, event.Text)
 			return err
 		}

@@ -2,6 +2,7 @@ package transcription
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
@@ -19,6 +20,7 @@ type Config struct {
 	EnableTwoPass     bool
 	RequestTimeout    time.Duration
 	ChunkDuration     time.Duration
+	TraceWriter       io.Writer
 }
 
 type OptionInput struct {
@@ -81,6 +83,7 @@ func (s Service) Runner() transcriber.Runner {
 		UserAgent:      s.Config.UserAgent,
 		WebSocketURL:   s.Config.WebSocketURL,
 		ChunkDuration:  s.Config.ChunkDuration,
+		TraceWriter:    s.Config.TraceWriter,
 	}}
 }
 

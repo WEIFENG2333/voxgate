@@ -37,6 +37,7 @@ type globalFlags struct {
 	quiet          bool
 	jsonLogs       bool
 	noColor        bool
+	traceASRPath   string
 }
 
 func main() {
@@ -71,7 +72,7 @@ func run(args []string) int {
 	}
 	switch rest[0] {
 	case "transcribe":
-		return transcribe(rest[1:], cfg)
+		return transcribe(rest[1:], cfg, g)
 	case "serve":
 		return serve(rest[1:], cfg, g)
 	case "doctor":
@@ -95,7 +96,7 @@ func parseGlobal(args []string) (globalFlags, []string, error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch a {
-		case "--config", "--credential-path", "--log-level":
+		case "--config", "--credential-path", "--log-level", "--trace-asr":
 			if i+1 >= len(args) {
 				return g, nil, fmt.Errorf("%s needs a value", a)
 			}
@@ -108,6 +109,8 @@ func parseGlobal(args []string) (globalFlags, []string, error) {
 				g.credentialPath = value
 			case "--log-level":
 				g.logLevel = value
+			case "--trace-asr":
+				g.traceASRPath = value
 			}
 		case "-v":
 			g.logLevel = "debug"
@@ -124,7 +127,7 @@ func parseGlobal(args []string) (globalFlags, []string, error) {
 	return g, rest, nil
 }
 
-func transcribe(args []string, cfg config.Config) int {
+func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	fs := flag.NewFlagSet("transcribe", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	format := fs.String("format", "", "text|json|verbose_json|srt|vtt|ndjson")
@@ -180,6 +183,15 @@ func transcribe(args []string, cfg config.Config) int {
 	ctx := context.Background()
 	svc := transcription.FromAppConfig(cfg)
 	svc.Config.ChunkDuration = *chunkDuration
+	traceWriter, err := openTraceWriter(g.traceASRPath)
+	if err != nil {
+		printErr("trace_error", err)
+		return 1
+	}
+	if traceWriter != nil {
+		defer traceWriter.Close()
+		svc.Config.TraceWriter = asr.NewSynchronizedWriter(traceWriter)
+	}
 	liveInput := isLiveStdinStream(fs.Arg(0), *inputFormat, *stream)
 	opts := svc.Options(transcription.OptionInput{
 		Language:           *language,
@@ -195,7 +207,7 @@ func transcribe(args []string, cfg config.Config) int {
 			printErr(streamErrorCode(err), err)
 			return streamErrorExitCode(err)
 		}
-		return writeStreamEvents(w, chosen, events)
+		return writeStreamEvents(w, chosen, events, *outPath == "" && stdoutTTY)
 	}
 	src, err := svc.Open(ctx, fs.Arg(0), *inputFormat, *sampleRate)
 	if err != nil {
@@ -236,7 +248,12 @@ func streamEvents(ctx context.Context, svc transcription.Service, path, inputFor
 	return svc.Stream(ctx, src, opts, allowChunking)
 }
 
-func copyStdinPCM(src *audio.LiveSource) {
+type pcmWriter interface {
+	WritePCM([]byte) error
+	CloseWrite()
+}
+
+func copyStdinPCM(src pcmWriter) {
 	defer src.CloseWrite()
 	buf := make([]byte, audio.BytesPerFrame*10)
 	for {
@@ -255,19 +272,77 @@ func copyStdinPCM(src *audio.LiveSource) {
 	}
 }
 
-func writeStreamEvents(w io.Writer, format string, events <-chan asr.Event) int {
+func writeStreamEvents(w io.Writer, format string, events <-chan asr.Event, interactiveText bool) int {
+	if format == output.Text {
+		return writeTextStreamEvents(w, events, interactiveText)
+	}
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
 			return 1
 		}
-		_ = output.WriteEvent(w, format, ev)
-		if format == output.Text && ev.Type == asr.EventTranscriptDelta {
-			_, _ = fmt.Fprint(w, "\r")
+		if err := output.WriteEvent(w, format, ev); err != nil {
+			printErr("format_error", err)
+			return 1
 		}
 	}
-	if format == output.Text {
-		_, _ = fmt.Fprintln(w)
+	return 0
+}
+
+func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, interactive bool) int {
+	lastLen := 0
+	lineOpen := false
+	for ev := range events {
+		if ev.Type == asr.EventError && ev.Error != nil {
+			if interactive && lineOpen {
+				if _, err := fmt.Fprintln(w); err != nil {
+					printErr("format_error", err)
+					return 1
+				}
+			}
+			printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
+			return 1
+		}
+		switch ev.Type {
+		case asr.EventTranscriptDelta:
+			if !interactive {
+				continue
+			}
+			padding := ""
+			if extra := lastLen - len(ev.Text); extra > 0 {
+				padding = strings.Repeat(" ", extra)
+			}
+			if _, err := fmt.Fprintf(w, "\r%s%s", ev.Text, padding); err != nil {
+				printErr("format_error", err)
+				return 1
+			}
+			lastLen = len(ev.Text)
+			lineOpen = true
+		case asr.EventTranscriptFinal:
+			if interactive {
+				padding := ""
+				if extra := lastLen - len(ev.Text); extra > 0 {
+					padding = strings.Repeat(" ", extra)
+				}
+				if _, err := fmt.Fprintf(w, "\r%s%s\n", ev.Text, padding); err != nil {
+					printErr("format_error", err)
+					return 1
+				}
+				lastLen = 0
+				lineOpen = false
+				continue
+			}
+			if _, err := fmt.Fprintln(w, ev.Text); err != nil {
+				printErr("format_error", err)
+				return 1
+			}
+		}
+	}
+	if interactive && lineOpen {
+		if _, err := fmt.Fprintln(w); err != nil {
+			printErr("format_error", err)
+			return 1
+		}
 	}
 	return 0
 }
@@ -325,11 +400,19 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 		}
 		return 2
 	}
+	traceWriter, err := openTraceWriter(g.traceASRPath)
+	if err != nil {
+		printErr("trace_error", err)
+		return 1
+	}
+	if traceWriter != nil {
+		defer traceWriter.Close()
+	}
 	srv := server.New(server.Config{
 		Host: *host, Port: *port, AuthToken: *authToken, MaxConcurrency: *maxConc, RequestTimeout: *timeout,
 		CredentialPath: cfg.CredentialPath, EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass: cfg.ASR.EnableThreePass, EnableTwoPass: cfg.ASR.EnableTwoPass, UserAgent: cfg.ASR.UserAgent,
-		LogLevel: cfg.LogLevel, JSONLogs: g.jsonLogs, Quiet: g.quiet,
+		LogLevel: cfg.LogLevel, JSONLogs: g.jsonLogs, Quiet: g.quiet, TraceWriter: asr.NewSynchronizedWriter(traceWriter),
 	})
 	if !g.quiet {
 		logStartup(g, srv.Addr())
@@ -473,8 +556,15 @@ func installCommand() string {
 	return "curl -fsSL https://raw.githubusercontent.com/" + repo + "/main/scripts/install.sh | sh"
 }
 
+func openTraceWriter(path string) (*os.File, error) {
+	if path == "" {
+		return nil, nil
+	}
+	return os.Create(config.ExpandPath(path))
+}
+
 func printErr(code string, err error) {
-	_ = json.NewEncoder(os.Stderr).Encode(map[string]any{"error": map[string]any{"code": code, "message": err.Error(), "details": map[string]any{}}})
+	fmt.Fprintf(os.Stderr, "Error [%s]: %s\n", code, err)
 }
 
 func usage() {
@@ -495,6 +585,7 @@ Global flags:
   -q, --quiet                 suppress non-error logs
   --no-color                  disable color
   --json-logs                 JSON logs
+  --trace-asr <file>          write raw upstream ASR WebSocket frames as NDJSON
 
 Examples:
   voxgate transcribe sample.wav

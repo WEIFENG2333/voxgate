@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type Config struct {
 	WebSocketURL   string
 	ChunkDuration  time.Duration
 	ChunkThreshold time.Duration
+	TraceWriter    io.Writer
 }
 
 type Runner struct {
@@ -36,6 +38,7 @@ func (r Runner) Transcribe(ctx context.Context, src *audio.Source, opts asr.Opti
 		CredentialPath: r.Config.CredentialPath,
 		UserAgent:      r.Config.UserAgent,
 		WebSocketURL:   r.Config.WebSocketURL,
+		TraceWriter:    r.Config.TraceWriter,
 	}}
 	if allowChunking && src.Duration() > r.threshold() {
 		return r.transcribeChunks(ctx, client, src.Chunks(r.chunkDuration()), opts)
@@ -56,6 +59,7 @@ func (r Runner) StreamFrames(ctx context.Context, src asr.PCMFrameSource, opts a
 		CredentialPath: r.Config.CredentialPath,
 		UserAgent:      r.Config.UserAgent,
 		WebSocketURL:   r.Config.WebSocketURL,
+		TraceWriter:    r.Config.TraceWriter,
 	}}
 	return client.Transcribe(ctx, src, enc, opts)
 }
@@ -68,6 +72,7 @@ func (r Runner) StreamWithChunking(ctx context.Context, src *audio.Source, opts 
 		CredentialPath: r.Config.CredentialPath,
 		UserAgent:      r.Config.UserAgent,
 		WebSocketURL:   r.Config.WebSocketURL,
+		TraceWriter:    r.Config.TraceWriter,
 	}}
 	out := make(chan asr.Event, 32)
 	go r.streamChunks(ctx, out, client, src.Chunks(r.streamChunkDuration()), opts)
@@ -82,7 +87,6 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 	defer close(out)
 	var b strings.Builder
 	var offset float64
-	nextSegmentIndex := 0
 	for _, chunk := range chunks {
 		// Long-file streaming uses serial chunks to stay within upstream session
 		// limits while keeping timestamps monotonic for downstream consumers.
@@ -96,28 +100,26 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "asr_error", Message: err.Error()}}
 			return
 		}
-		chunkText := ""
+		var chunkText strings.Builder
 		for ev := range events {
 			if ev.Type == asr.EventError {
 				out <- ev
 				return
 			}
-			switch ev.Type {
-			case asr.EventTranscriptSegment:
-				ev.Start += offset
-				ev.End += offset
-				ev.SegmentIndex = nextSegmentIndex
-				nextSegmentIndex++
-			case asr.EventTranscriptDone:
-				chunkText = ev.Text
+			if ev.Type == asr.EventTranscriptFinal {
+				chunkText.WriteString(ev.Text)
+				continue
+			}
+			if ev.Type == asr.EventStreamDone {
 				continue
 			}
 			out <- ev
 		}
-		b.WriteString(chunkText)
+		b.WriteString(chunkText.String())
 		offset += chunk.Duration().Seconds()
 	}
-	out <- asr.Event{Type: asr.EventTranscriptDone, Text: b.String(), Duration: offset}
+	out <- asr.Event{Type: asr.EventTranscriptFinal, Text: b.String(), Duration: offset}
+	out <- asr.Event{Type: asr.EventStreamDone, Duration: offset}
 }
 
 func (r Runner) transcribeChunks(ctx context.Context, client streamClient, chunks []*audio.Source, opts asr.Options) (asr.Result, error) {
@@ -221,15 +223,14 @@ func normalizeChunkResult(res asr.Result, language string, offset, duration floa
 
 func collect(events <-chan asr.Event) (asr.Result, error) {
 	var result asr.Result
+	var text strings.Builder
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			return result, fmt.Errorf("%s", ev.Error.Message)
 		}
-		if ev.Type == asr.EventTranscriptSegment {
-			result.Segments = append(result.Segments, asr.Segment{Index: ev.SegmentIndex, Text: ev.Text, Start: ev.Start, End: ev.End})
-		}
-		if ev.Type == asr.EventTranscriptDone {
-			result.Text = ev.Text
+		if ev.Type == asr.EventTranscriptFinal {
+			text.WriteString(ev.Text)
+			result.Text = text.String()
 			result.Duration = ev.Duration
 			result.Language = "zh"
 			result.Results = ev.Results

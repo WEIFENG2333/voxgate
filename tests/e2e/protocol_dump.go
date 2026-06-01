@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,30 +23,116 @@ import (
 	asrproto "github.com/WEIFENG2333/voxgate/internal/proto"
 )
 
+const (
+	wireOpus = "opus"
+	wirePCM  = "pcm"
+
+	defaultSilenceFrames = 150
+	probeTimeout         = 90 * time.Second
+	finalWaitTimeout     = 30 * time.Second
+)
+
+type config struct {
+	AudioPath          string
+	CredentialPath     string
+	SessionAudioFormat string
+	WireAudioFormat    string
+	MaxFrames          int
+	FramesPerRequest   int
+	SilenceFrames      int
+	Realtime           bool
+	ConcurrentRead     bool
+	ProbeContinuation  bool
+}
+
 func main() {
-	audioPath := flag.String("audio", "tests/audio/zh_5s.wav", "audio file to send")
-	credentialPath := flag.String("credential-path", "", "credential cache path")
-	maxFrames := flag.Int("max-frames", 0, "limit audio frames; 0 sends the whole file")
-	probeContinuation := flag.Bool("probe-continuation", false, "send two utterances in one session without FinishSession between them")
-	silenceFrames := flag.Int("silence-frames", 150, "silence frames after each utterance for continuation probe")
+	cfg := parseFlags()
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	if err := run(ctx, cfg); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func parseFlags() config {
+	var cfg config
+	flag.StringVar(&cfg.AudioPath, "audio", "tests/audio/zh_5s.wav", "audio file to send")
+	flag.StringVar(&cfg.CredentialPath, "credential-path", "", "credential cache path")
+	flag.StringVar(&cfg.SessionAudioFormat, "session-audio-format", asr.AudioFormatSpeechOpus, "StartSession audio_info.format")
+	flag.StringVar(&cfg.WireAudioFormat, "wire-audio-format", wireOpus, "TaskRequest audio_data encoding: opus|pcm")
+	flag.IntVar(&cfg.MaxFrames, "max-frames", 0, "limit 20ms audio frames; 0 sends the whole file")
+	flag.IntVar(&cfg.FramesPerRequest, "frames-per-request", 1, "20ms PCM frames per TaskRequest")
+	flag.IntVar(&cfg.SilenceFrames, "silence-frames", defaultSilenceFrames, "silence frames after each utterance for continuation probe")
+	flag.BoolVar(&cfg.Realtime, "realtime", false, "sleep according to logical audio duration between TaskRequests")
+	flag.BoolVar(&cfg.ConcurrentRead, "concurrent-read", false, "read upstream responses while sending audio")
+	flag.BoolVar(&cfg.ProbeContinuation, "probe-continuation", false, "send two utterances in one session without FinishSession between them")
 	flag.Parse()
 
-	if *credentialPath == "" {
-		*credentialPath = fmt.Sprintf("%s/voxgate-protocol-dump-%d.json", os.TempDir(), time.Now().UnixNano())
+	if cfg.CredentialPath == "" {
+		cfg.CredentialPath = fmt.Sprintf("%s/voxgate-protocol-dump-%d.json", os.TempDir(), time.Now().UnixNano())
 	}
+	if cfg.FramesPerRequest <= 0 {
+		cfg.FramesPerRequest = 1
+	}
+	if cfg.WireAudioFormat == wireOpus {
+		// Opus packets already have codec framing. Do not concatenate multiple
+		// encoded packets into one TaskRequest unless the upstream protocol
+		// explicitly documents that shape.
+		cfg.FramesPerRequest = 1
+	}
+	return cfg
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
+func run(ctx context.Context, cfg config) error {
 	emit("probe.start", map[string]any{
-		"audio":           *audioPath,
-		"credential_path": *credentialPath,
+		"audio":                cfg.AudioPath,
+		"credential_path":      cfg.CredentialPath,
+		"session_audio_format": cfg.SessionAudioFormat,
+		"wire_audio_format":    cfg.WireAudioFormat,
+		"frames_per_request":   cfg.FramesPerRequest,
+		"realtime":             cfg.Realtime,
+		"concurrent_read":      cfg.ConcurrentRead,
+		"probe_continuation":   cfg.ProbeContinuation,
 	})
 
-	manager := asr.CredentialManager{Path: *credentialPath, UserAgent: asr.DefaultUserAgent}
+	creds, err := loadCredentials(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	src, err := audio.ConvertFile(ctx, cfg.AudioPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	conn, err := dial(ctx, creds)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	requestID := uuid.NewString()
+	probe := &sessionProbe{
+		cfg:       cfg,
+		conn:      conn,
+		creds:     creds,
+		requestID: requestID,
+		sender:    newAudioSender(cfg),
+	}
+	if err := probe.startSession(); err != nil {
+		return err
+	}
+	if cfg.ProbeContinuation {
+		return probe.runContinuation(src)
+	}
+	return probe.runSingle(ctx, src)
+}
+
+func loadCredentials(ctx context.Context, cfg config) (asr.Credentials, error) {
+	manager := asr.CredentialManager{Path: cfg.CredentialPath, UserAgent: asr.DefaultUserAgent}
 	creds, err := manager.Ensure(ctx, true)
 	if err != nil {
-		log.Fatal(err)
+		return asr.Credentials{}, err
 	}
 	emit("credentials", map[string]any{
 		"device_id":  creds.DeviceID,
@@ -53,190 +140,296 @@ func main() {
 		"has_token":  creds.Token != "",
 		"cdid_len":   len(creds.CDID),
 	})
+	return creds, nil
+}
 
-	src, err := audio.ConvertFile(ctx, *audioPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer src.Close()
-	enc, err := audio.NewOpusEncoder()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer enc.Close()
-
+func dial(ctx context.Context, creds asr.Credentials) (*websocket.Conn, error) {
 	u, err := url.Parse(asr.WebSocketURL)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	q := u.Query()
 	q.Set("aid", strconv.Itoa(asr.AID))
 	q.Set("device_id", creds.DeviceID)
 	u.RawQuery = q.Encode()
+
 	header := http.Header{}
 	header.Set("User-Agent", asr.DefaultUserAgent)
 	header.Set("proto-version", "v2")
 	header.Set("x-custom-keepalive", "true")
-	emit("ws.connect.request", map[string]any{
-		"url":     u.String(),
-		"headers": header,
-	})
+	emit("ws.connect.request", map[string]any{"url": u.String(), "headers": header})
+
 	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		if resp != nil {
 			emit("ws.connect.error", map[string]any{"status": resp.Status, "headers": resp.Header})
 		}
-		log.Fatal(err)
+		return nil, err
 	}
-	defer conn.Close()
 	if resp != nil {
 		emit("ws.connect.response", map[string]any{"status": resp.Status, "headers": resp.Header})
 	}
+	return conn, nil
+}
 
-	requestID := uuid.NewString()
-	send(conn, "StartTask", asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartTask", RequestID: requestID})
-	read(conn, "StartTask")
+type sessionProbe struct {
+	cfg       config
+	conn      *websocket.Conn
+	creds     asr.Credentials
+	requestID string
+	sender    *audioSender
+}
 
-	sessionPayload, _ := json.Marshal(map[string]any{
-		"audio_info":              map[string]any{"channel": 1, "format": "speech_opus", "sample_rate": 16000},
+func (p *sessionProbe) startSession() error {
+	p.send(asr.MethodStartTask, asrproto.Request{
+		Token:       p.creds.Token,
+		ServiceName: asr.ServiceNameASR,
+		MethodName:  asr.MethodStartTask,
+		RequestID:   p.requestID,
+	})
+	if _, _, err := p.read(asr.MethodStartTask); err != nil {
+		return err
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"audio_info":              map[string]any{"channel": asr.UpstreamChannels, "format": p.cfg.SessionAudioFormat, "sample_rate": asr.UpstreamSampleRate},
 		"enable_punctuation":      true,
 		"enable_speech_rejection": false,
 		"extra": map[string]any{
-			"app_name": "com.android.chrome", "cell_compress_rate": 8, "did": creds.DeviceID,
+			"app_name": "com.android.chrome", "cell_compress_rate": 8, "did": p.creds.DeviceID,
 			"enable_asr_threepass": true, "enable_asr_twopass": true, "input_mode": "tool",
 		},
 	})
-	send(conn, "StartSession", asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartSession", Payload: string(sessionPayload), RequestID: requestID})
-	read(conn, "StartSession")
-
-	timestamp := time.Now().UnixMilli()
-	frameIndex := 0
-	if *probeContinuation {
-		sent, err := sendSourceFrames(conn, enc, src.Clone(), requestID, timestamp, frameIndex, *maxFrames, true)
-		if err != nil {
-			log.Fatal(err)
-		}
-		frameIndex += sent
-		sent, err = sendSilenceFrames(conn, enc, requestID, timestamp, frameIndex, *silenceFrames, asrproto.FrameStateMiddle)
-		if err != nil {
-			log.Fatal(err)
-		}
-		frameIndex += sent
-		emit("continuation.first_audio_sent", map[string]any{"frames_total": frameIndex})
-		first, err := readUntilFinal(conn, "continuation.first")
-		if err != nil {
-			emit("continuation.first.error", map[string]any{"error": err.Error()})
-			return
-		}
-		emit("continuation.first.final", map[string]any{"text": first})
-
-		sent, err = sendSourceFrames(conn, enc, src.Clone(), requestID, timestamp, frameIndex, *maxFrames, false)
-		if err != nil {
-			emit("continuation.second_send.error", map[string]any{"error": err.Error()})
-			return
-		}
-		frameIndex += sent
-		sent, err = sendSilenceFrames(conn, enc, requestID, timestamp, frameIndex, *silenceFrames, asrproto.FrameStateMiddle)
-		if err != nil {
-			emit("continuation.second_silence.error", map[string]any{"error": err.Error()})
-			return
-		}
-		frameIndex += sent
-		emit("continuation.second_audio_sent", map[string]any{"frames_total": frameIndex})
-		second, err := readUntilFinal(conn, "continuation.second")
-		if err != nil {
-			emit("continuation.second.error", map[string]any{"error": err.Error()})
-			return
-		}
-		emit("continuation.second.final", map[string]any{"text": second})
-		send(conn, "FinishSession", asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
-		emit("probe.done", map[string]any{"mode": "continuation", "frames": frameIndex})
-		return
-	}
-	sent, err := sendSourceFrames(conn, enc, src, requestID, timestamp, frameIndex, *maxFrames, true)
-	if err != nil {
-		log.Fatal(err)
-	}
-	frameIndex += sent
-	if frameIndex > 0 {
-		_, err := sendSilenceFrames(conn, enc, requestID, timestamp, frameIndex, 1, asrproto.FrameStateLast)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-	send(conn, "FinishSession", asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
-	emit("audio.sent", map[string]any{"frames": frameIndex, "duration_seconds": src.Duration().Seconds()})
-
-	for {
-		resp, raw, err := read(conn, "recv")
-		if err != nil {
-			emit("recv.error", map[string]any{"error": err.Error()})
-			return
-		}
-		if resp.MessageType == "SessionFinished" || resp.MessageType == "TaskFailed" || resp.MessageType == "SessionFailed" {
-			emit("probe.done", map[string]any{"last_message_type": resp.MessageType, "raw_len": len(raw)})
-			return
-		}
-	}
+	p.send(asr.MethodStartSession, asrproto.Request{
+		Token:       p.creds.Token,
+		ServiceName: asr.ServiceNameASR,
+		MethodName:  asr.MethodStartSession,
+		Payload:     string(payload),
+		RequestID:   p.requestID,
+	})
+	_, _, err := p.read(asr.MethodStartSession)
+	return err
 }
 
-func sendSourceFrames(conn *websocket.Conn, enc *audio.OpusEncoder, src *audio.Source, requestID string, timestamp int64, startFrame, maxFrames int, first bool) (int, error) {
+func (p *sessionProbe) runSingle(ctx context.Context, src *audio.Source) error {
+	readDone := make(chan struct{})
+	if p.cfg.ConcurrentRead {
+		go func() {
+			defer close(readDone)
+			p.readUntilTerminal("recv")
+		}()
+	}
+
+	start := time.Now().UnixMilli()
+	frames, err := p.sender.sendSource(p.conn, src, p.requestID, start, 0, p.cfg.MaxFrames, true)
+	if err != nil {
+		return err
+	}
+	if frames > 0 {
+		if _, err := p.sender.sendSilence(p.conn, p.requestID, start, frames, 1, asrproto.FrameStateLast); err != nil {
+			return err
+		}
+	}
+	p.send(asr.MethodFinishSession, asrproto.Request{
+		Token:       p.creds.Token,
+		ServiceName: asr.ServiceNameASR,
+		MethodName:  asr.MethodFinishSession,
+		RequestID:   p.requestID,
+	})
+	emit("audio.sent", map[string]any{"frames": frames, "duration_seconds": src.Duration().Seconds()})
+
+	if p.cfg.ConcurrentRead {
+		select {
+		case <-readDone:
+		case <-ctx.Done():
+			emit("recv.error", map[string]any{"error": ctx.Err().Error()})
+		}
+		return nil
+	}
+	p.readUntilTerminal("recv")
+	return nil
+}
+
+func (p *sessionProbe) runContinuation(src *audio.Source) error {
+	start := time.Now().UnixMilli()
+	frameIndex := 0
+
+	firstFrames, err := p.sender.sendSource(p.conn, src.Clone(), p.requestID, start, frameIndex, p.cfg.MaxFrames, true)
+	if err != nil {
+		return err
+	}
+	frameIndex += firstFrames
+	silenceFrames, err := p.sender.sendSilence(p.conn, p.requestID, start, frameIndex, p.cfg.SilenceFrames, asrproto.FrameStateMiddle)
+	if err != nil {
+		return err
+	}
+	frameIndex += silenceFrames
+	emit("continuation.first_audio_sent", map[string]any{"frames_total": frameIndex})
+	first, err := p.readUntilFinal("continuation.first")
+	if err != nil {
+		emit("continuation.first.error", map[string]any{"error": err.Error()})
+		return nil
+	}
+	emit("continuation.first.final", map[string]any{"text": first})
+
+	secondFrames, err := p.sender.sendSource(p.conn, src.Clone(), p.requestID, start, frameIndex, p.cfg.MaxFrames, false)
+	if err != nil {
+		emit("continuation.second_send.error", map[string]any{"error": err.Error()})
+		return nil
+	}
+	frameIndex += secondFrames
+	silenceFrames, err = p.sender.sendSilence(p.conn, p.requestID, start, frameIndex, p.cfg.SilenceFrames, asrproto.FrameStateMiddle)
+	if err != nil {
+		emit("continuation.second_silence.error", map[string]any{"error": err.Error()})
+		return nil
+	}
+	frameIndex += silenceFrames
+	emit("continuation.second_audio_sent", map[string]any{"frames_total": frameIndex})
+	second, err := p.readUntilFinal("continuation.second")
+	if err != nil {
+		emit("continuation.second.error", map[string]any{"error": err.Error()})
+		return nil
+	}
+	emit("continuation.second.final", map[string]any{"text": second})
+
+	p.send(asr.MethodFinishSession, asrproto.Request{
+		Token:       p.creds.Token,
+		ServiceName: asr.ServiceNameASR,
+		MethodName:  asr.MethodFinishSession,
+		RequestID:   p.requestID,
+	})
+	emit("probe.done", map[string]any{"mode": "continuation", "frames": frameIndex})
+	return nil
+}
+
+type audioSender struct {
+	wireFormat       string
+	framesPerRequest int
+	realtime         bool
+	encoder          *audio.OpusEncoder
+}
+
+func newAudioSender(cfg config) *audioSender {
+	s := &audioSender{
+		wireFormat:       cfg.WireAudioFormat,
+		framesPerRequest: cfg.FramesPerRequest,
+		realtime:         cfg.Realtime,
+	}
+	if s.framesPerRequest <= 0 {
+		s.framesPerRequest = 1
+	}
+	switch s.wireFormat {
+	case wireOpus:
+		enc, err := audio.NewOpusEncoder()
+		if err != nil {
+			log.Fatal(err)
+		}
+		s.encoder = enc
+		s.framesPerRequest = 1
+	case wirePCM:
+	default:
+		log.Fatalf("unsupported wire audio format %q", s.wireFormat)
+	}
+	return s
+}
+
+func (s *audioSender) sendSource(conn *websocket.Conn, src *audio.Source, requestID string, timestamp int64, startFrame, maxFrames int, first bool) (int, error) {
 	sent := 0
 	for {
 		if maxFrames > 0 && sent >= maxFrames {
 			break
 		}
-		pcm, ok, err := src.NextFrame()
+		chunk, frames, err := nextChunk(src, s.framesPerRequest, maxFrames, sent)
 		if err != nil {
 			return sent, err
 		}
-		if !ok {
+		if frames == 0 {
 			break
 		}
 		state := asrproto.FrameStateMiddle
 		if first && sent == 0 {
 			state = asrproto.FrameStateFirst
 		}
-		if err := sendPCMFrame(conn, enc, requestID, timestamp, startFrame+sent, pcm, state); err != nil {
+		if err := s.sendChunk(conn, requestID, timestamp, startFrame+sent, chunk, state); err != nil {
 			return sent, err
 		}
-		sent++
+		s.sleep(frames)
+		sent += frames
 	}
 	return sent, nil
 }
 
-func sendSilenceFrames(conn *websocket.Conn, enc *audio.OpusEncoder, requestID string, timestamp int64, startFrame, count int, state asrproto.FrameState) (int, error) {
-	for i := 0; i < count; i++ {
-		if err := sendPCMFrame(conn, enc, requestID, timestamp, startFrame+i, make([]byte, audio.BytesPerFrame), state); err != nil {
-			return i, err
+func nextChunk(src *audio.Source, framesPerRequest, maxFrames, sent int) ([]byte, int, error) {
+	var chunk []byte
+	for len(chunk)/audio.BytesPerFrame < framesPerRequest {
+		if maxFrames > 0 && sent+len(chunk)/audio.BytesPerFrame >= maxFrames {
+			break
 		}
+		pcm, ok, err := src.NextFrame()
+		if err != nil {
+			return nil, 0, err
+		}
+		if !ok {
+			break
+		}
+		chunk = append(chunk, pcm...)
 	}
-	return count, nil
+	return chunk, len(chunk) / audio.BytesPerFrame, nil
 }
 
-func sendPCMFrame(conn *websocket.Conn, enc *audio.OpusEncoder, requestID string, timestamp int64, frameIndex int, pcm []byte, state asrproto.FrameState) error {
-	opusFrame, err := enc.EncodePCMFrame(pcm)
-	if err != nil {
-		return err
+func (s *audioSender) sendSilence(conn *websocket.Conn, requestID string, timestamp int64, startFrame, count int, state asrproto.FrameState) (int, error) {
+	sent := 0
+	for sent < count {
+		frames := s.framesPerRequest
+		if remaining := count - sent; remaining < frames {
+			frames = remaining
+		}
+		chunk := make([]byte, frames*audio.BytesPerFrame)
+		if err := s.sendChunk(conn, requestID, timestamp, startFrame+sent, chunk, state); err != nil {
+			return sent, err
+		}
+		s.sleep(frames)
+		sent += frames
+	}
+	return sent, nil
+}
+
+func (s *audioSender) sendChunk(conn *websocket.Conn, requestID string, timestamp int64, frameIndex int, pcm []byte, state asrproto.FrameState) error {
+	audioData := pcm
+	if s.wireFormat == wireOpus {
+		if len(pcm) != audio.BytesPerFrame {
+			return fmt.Errorf("opus TaskRequest must contain one 20ms PCM frame before encoding, got %d bytes", len(pcm))
+		}
+		opusFrame, err := s.encoder.EncodePCMFrame(pcm)
+		if err != nil {
+			return err
+		}
+		audioData = opusFrame
 	}
 	payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-	req := asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}
+	req := asrproto.Request{ServiceName: asr.ServiceNameASR, MethodName: asr.MethodTaskRequest, Payload: string(payload), AudioData: audioData, RequestID: requestID, FrameState: state}
 	if frameIndex < 3 || frameIndex%100 == 0 || state == asrproto.FrameStateLast {
-		emit("TaskRequest.request", requestSummary(req))
+		emit(asr.MethodTaskRequest+".request", requestSummary(req))
 	}
 	return conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalRequest(req))
 }
 
-func readUntilFinal(conn *websocket.Conn, stage string) (string, error) {
-	deadline := time.Now().Add(30 * time.Second)
-	_ = conn.SetReadDeadline(deadline)
-	defer conn.SetReadDeadline(time.Time{})
+func (s *audioSender) sleep(frames int) {
+	if s.realtime {
+		time.Sleep(time.Duration(frames*audio.FrameDurationMS) * time.Millisecond)
+	}
+}
+
+func (p *sessionProbe) readUntilFinal(stage string) (string, error) {
+	deadline := time.Now().Add(finalWaitTimeout)
+	_ = p.conn.SetReadDeadline(deadline)
+	defer p.conn.SetReadDeadline(time.Time{})
 	for {
-		resp, _, err := read(conn, stage)
+		resp, _, err := p.read(stage)
 		if err != nil {
 			return "", err
 		}
-		if resp.MessageType == "SessionFinished" || resp.MessageType == "TaskFailed" || resp.MessageType == "SessionFailed" {
+		if isTerminal(resp.MessageType) {
 			return "", fmt.Errorf("unexpected %s: %s", resp.MessageType, resp.StatusMessage)
 		}
 		text, final := finalText(resp.ResultJSON)
@@ -244,6 +437,24 @@ func readUntilFinal(conn *websocket.Conn, stage string) (string, error) {
 			return text, nil
 		}
 	}
+}
+
+func (p *sessionProbe) readUntilTerminal(stage string) {
+	for {
+		resp, raw, err := p.read(stage)
+		if err != nil {
+			emit(stage+".error", map[string]any{"error": err.Error()})
+			return
+		}
+		if isTerminal(resp.MessageType) {
+			emit("probe.done", map[string]any{"last_message_type": resp.MessageType, "raw_len": len(raw)})
+			return
+		}
+	}
+}
+
+func isTerminal(messageType string) bool {
+	return messageType == asr.MessageSessionFinished || messageType == asr.MessageTaskFailed || messageType == asr.MessageSessionFailed
 }
 
 func finalText(resultJSON string) (string, bool) {
@@ -275,16 +486,16 @@ func finalText(resultJSON string) (string, bool) {
 	return text, text != "" && (nonstream || (!isInterim && vadFinished))
 }
 
-func send(conn *websocket.Conn, stage string, req asrproto.Request) {
+func (p *sessionProbe) send(stage string, req asrproto.Request) {
 	emit(stage+".request", requestSummary(req))
-	if err := conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalRequest(req)); err != nil {
+	if err := p.conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalRequest(req)); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func read(conn *websocket.Conn, stage string) (asrproto.Response, []byte, error) {
+func (p *sessionProbe) read(stage string) (asrproto.Response, []byte, error) {
 	for {
-		mt, data, err := conn.ReadMessage()
+		mt, data, err := p.conn.ReadMessage()
 		if err != nil {
 			return asrproto.Response{}, nil, err
 		}
@@ -332,9 +543,13 @@ func decodeResultJSON(s string) any {
 	return v
 }
 
+var emitMu sync.Mutex
+
 func emit(event string, data map[string]any) {
 	data["event"] = event
 	data["ts"] = time.Now().Format(time.RFC3339Nano)
+	emitMu.Lock()
+	defer emitMu.Unlock()
 	_ = json.NewEncoder(os.Stdout).Encode(data)
 }
 

@@ -142,18 +142,18 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	trace := newFrameTrace(c.Config.TraceWriter)
 	send := func(req asrproto.Request) error { return sendPBTrace(conn, trace, req) }
 	read := func() (asrproto.Response, error) { return readPBTrace(conn, trace) }
-	if err := send(asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartTask", RequestID: requestID}); err != nil {
+	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartTask, RequestID: requestID}); err != nil {
 		return true, err
 	}
 	resp, err := read()
 	if err != nil {
 		return true, err
 	}
-	if resp.MessageType == "TaskFailed" {
+	if resp.MessageType == MessageTaskFailed {
 		return true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	sessionPayload, _ := json.Marshal(map[string]any{
-		"audio_info":              map[string]any{"channel": 1, "format": "speech_opus", "sample_rate": 16000},
+		"audio_info":              map[string]any{"channel": UpstreamChannels, "format": AudioFormatSpeechOpus, "sample_rate": UpstreamSampleRate},
 		"enable_punctuation":      opts.EnablePunctuation,
 		"enable_speech_rejection": false,
 		"extra": map[string]any{
@@ -161,14 +161,14 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 			"enable_asr_threepass": opts.EnableThreePass, "enable_asr_twopass": opts.EnableTwoPass, "input_mode": "tool",
 		},
 	})
-	if err := send(asrproto.Request{Token: creds.Token, ServiceName: "ASR", MethodName: "StartSession", Payload: string(sessionPayload), RequestID: requestID}); err != nil {
+	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartSession, Payload: string(sessionPayload), RequestID: requestID}); err != nil {
 		return true, err
 	}
 	resp, err = read()
 	if err != nil {
 		return true, err
 	}
-	if resp.MessageType == "SessionFailed" {
+	if resp.MessageType == MessageSessionFailed {
 		return true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	events <- Event{Type: EventSessionStarted, RequestID: requestID}
@@ -233,7 +233,7 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 		}
 		// Upstream timestamps are logical audio time, not wall-clock send time.
 		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}); err != nil {
+		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: ServiceNameASR, MethodName: MethodTaskRequest, Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}); err != nil {
 			return err
 		}
 		frameIndex++
@@ -245,21 +245,21 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 		// File inputs can be sent as fast as possible; live/realtime inputs must
 		// preserve capture pace so the upstream VAD sees natural timing.
 		if realtime {
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(time.Duration(UpstreamFrameDurationMS) * time.Millisecond)
 		}
 	}
 	if frameIndex > 0 {
-		silence := make([]byte, 640)
+		silence := make([]byte, UpstreamBytesPerFrame)
 		opusFrame, err := encoder.EncodePCMFrame(silence)
 		if err != nil {
 			return err
 		}
 		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: "ASR", MethodName: "TaskRequest", Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
+		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: ServiceNameASR, MethodName: MethodTaskRequest, Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
 			return err
 		}
 	}
-	return sendPBTrace(conn, trace, asrproto.Request{Token: token, ServiceName: "ASR", MethodName: "FinishSession", RequestID: requestID})
+	return sendPBTrace(conn, trace, asrproto.Request{Token: token, ServiceName: ServiceNameASR, MethodName: MethodFinishSession, RequestID: requestID})
 }
 
 func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrace, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
@@ -300,9 +300,9 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			return err
 		}
 		switch resp.MessageType {
-		case "TaskFailed", "SessionFailed":
+		case MessageTaskFailed, MessageSessionFailed:
 			return fmt.Errorf("%s (code=%d): %s", resp.MessageType, resp.StatusCode, resp.StatusMessage)
-		case "SessionFinished":
+		case MessageSessionFinished:
 			if finalEmitted {
 				return nil
 			}

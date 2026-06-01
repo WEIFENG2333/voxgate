@@ -62,11 +62,23 @@ func TestUpdateRejectsUnexpectedArgs(t *testing.T) {
 }
 
 func TestSameVersion(t *testing.T) {
-	if !sameVersion("0.2.8", "v0.2.8") {
+	if !sameVersion(version, "v"+version) {
 		t.Fatal("expected v-prefixed latest tag to match current version")
 	}
-	if sameVersion("0.2.8", "v0.2.9") {
+	if sameVersion(version, "v0.0.0") {
 		t.Fatal("expected different versions not to match")
+	}
+}
+
+func TestCompareVersion(t *testing.T) {
+	if got := compareVersion("0.2.9", "v0.2.8"); got != 1 {
+		t.Fatalf("compare newer = %d, want 1", got)
+	}
+	if got := compareVersion("0.2.8", "v0.2.9"); got != -1 {
+		t.Fatalf("compare older = %d, want -1", got)
+	}
+	if got := compareVersion("0.2.9", "v0.2.9"); got != 0 {
+		t.Fatalf("compare equal = %d, want 0", got)
 	}
 }
 

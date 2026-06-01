@@ -37,16 +37,26 @@ detect_arch() {
 }
 
 latest_version() {
+  version=""
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-      sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
+    version="$(curl -fsSL -H "User-Agent: voxgate-installer" "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
+      sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+    if [ -z "$version" ]; then
+      url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)"
+      version="$(printf '%s\n' "$url" | sed -n 's#.*/releases/tag/\([^/?#]*\).*#\1#p' | head -n 1)"
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO- "https://api.github.com/repos/$REPO/releases/latest" |
-      sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
+    version="$(wget -qO- --header="User-Agent: voxgate-installer" "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
+      sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+    if [ -z "$version" ]; then
+      version="$(wget -O /dev/null -S "https://github.com/$REPO/releases/latest" 2>&1 |
+        sed -n 's#.*[Ll]ocation: .*/releases/tag/\([^[:space:]]*\).*#\1#p' | tail -n 1 || true)"
+    fi
   else
     echo "error: curl or wget is required" >&2
     exit 1
   fi
+  printf '%s\n' "$version"
 }
 
 download() {

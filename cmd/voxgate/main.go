@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	version = "0.2.8"
+	version = "0.2.9"
 	repo    = "WEIFENG2333/voxgate"
 )
 

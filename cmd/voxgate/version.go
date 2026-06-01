@@ -34,8 +34,12 @@ func versionCmd(args []string) int {
 		return 1
 	}
 	fmt.Println("latest", latest)
-	if sameVersion(version, latest) {
+	switch compareVersion(version, latest) {
+	case 0:
 		fmt.Println("status up-to-date")
+		return 0
+	case 1:
+		fmt.Println("status newer-than-latest")
 		return 0
 	}
 	fmt.Println("status update-available")
@@ -65,8 +69,12 @@ func updateCmd(args []string) int {
 	}
 	fmt.Println("current", version)
 	fmt.Println("latest", latest)
-	if sameVersion(version, latest) {
+	switch compareVersion(version, latest) {
+	case 0:
 		fmt.Println("status up-to-date")
+		return 0
+	case 1:
+		fmt.Println("status newer-than-latest")
 		return 0
 	}
 	fmt.Println("status update-available")
@@ -75,6 +83,18 @@ func updateCmd(args []string) int {
 }
 
 func latestRelease(ctx context.Context) (string, error) {
+	tag, err := latestReleaseFromAPI(ctx)
+	if err == nil {
+		return tag, nil
+	}
+	fallbackTag, fallbackErr := latestReleaseFromRedirect(ctx)
+	if fallbackErr == nil {
+		return fallbackTag, nil
+	}
+	return "", fmt.Errorf("%w; fallback failed: %v", err, fallbackErr)
+}
+
+func latestReleaseFromAPI(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+repo+"/releases/latest", nil)
 	if err != nil {
 		return "", err
@@ -103,8 +123,77 @@ func latestRelease(ctx context.Context) (string, error) {
 	return body.TagName, nil
 }
 
+func latestReleaseFromRedirect(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://github.com/"+repo+"/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "voxgate/"+version)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.Request == nil || resp.Request.URL == nil {
+		return "", fmt.Errorf("GitHub latest release redirect had no final URL")
+	}
+	finalURL := resp.Request.URL.String()
+	const marker = "/releases/tag/"
+	i := strings.LastIndex(finalURL, marker)
+	if i < 0 {
+		return "", fmt.Errorf("GitHub latest release redirect did not end at a tag")
+	}
+	tag := finalURL[i+len(marker):]
+	if j := strings.IndexAny(tag, "?#/"); j >= 0 {
+		tag = tag[:j]
+	}
+	if tag == "" {
+		return "", fmt.Errorf("GitHub latest release redirect had empty tag")
+	}
+	return tag, nil
+}
+
 func sameVersion(current, latest string) bool {
-	return strings.TrimPrefix(current, "v") == strings.TrimPrefix(latest, "v")
+	return compareVersion(current, latest) == 0
+}
+
+func compareVersion(current, latest string) int {
+	currentParts := versionParts(current)
+	latestParts := versionParts(latest)
+	for i := 0; i < len(currentParts) || i < len(latestParts); i++ {
+		var currentPart, latestPart int
+		if i < len(currentParts) {
+			currentPart = currentParts[i]
+		}
+		if i < len(latestParts) {
+			latestPart = latestParts[i]
+		}
+		if currentPart < latestPart {
+			return -1
+		}
+		if currentPart > latestPart {
+			return 1
+		}
+	}
+	return 0
+}
+
+func versionParts(v string) []int {
+	v = strings.TrimPrefix(v, "v")
+	fields := strings.Split(v, ".")
+	parts := make([]int, 0, len(fields))
+	for _, field := range fields {
+		var part int
+		for _, r := range field {
+			if r < '0' || r > '9' {
+				break
+			}
+			part = part*10 + int(r-'0')
+		}
+		parts = append(parts, part)
+	}
+	return parts
 }
 
 func installCommand() string {

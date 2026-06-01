@@ -184,6 +184,19 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	recvErr := make(chan error, 1)
 	done := make(chan struct{})
 	finishedSending := make(chan struct{})
+	var closeDone sync.Once
+	stopRecv := func() {
+		closeDone.Do(func() {
+			close(done)
+			_ = conn.Close()
+		})
+	}
+	waitRecv := func() {
+		select {
+		case <-recvErr:
+		case <-time.After(time.Second):
+		}
+	}
 	go func() {
 		sendErr <- c.sendAudio(ctx, conn, trace, stats, requestID, creds.Token, source, encoder, opts.Realtime)
 	}()
@@ -193,6 +206,8 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	select {
 	case err := <-sendErr:
 		if err != nil {
+			stopRecv()
+			waitRecv()
 			return false, stats.wrap("send audio", err)
 		}
 		close(finishedSending)
@@ -203,16 +218,19 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		case err := <-recvErr:
 			return false, stats.wrap("receive final response", err)
 		case <-ctx.Done():
+			stopRecv()
+			waitRecv()
 			return false, stats.wrap("wait for final response", ctx.Err())
 		}
 	case err := <-recvErr:
 		if err != nil {
 			return false, stats.wrap("receive upstream response", err)
 		}
-		close(done)
+		stopRecv()
 		return false, nil
 	case <-ctx.Done():
-		close(done)
+		stopRecv()
+		waitRecv()
 		return false, stats.wrap("transcription session", ctx.Err())
 	}
 }

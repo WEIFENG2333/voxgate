@@ -36,9 +36,31 @@ function Get-AssetArch {
     }
 }
 
+function Get-LatestVersion {
+    try {
+        $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "voxgate-installer" }
+        if (-not [string]::IsNullOrWhiteSpace($latest.tag_name)) {
+            return $latest.tag_name
+        }
+    } catch {
+        # GitHub's API can be rate limited. Fall back to the public redirect below.
+    }
+
+    $response = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -MaximumRedirection 10
+    $finalUri = $null
+    if ($response.BaseResponse.ResponseUri) {
+        $finalUri = $response.BaseResponse.ResponseUri.AbsoluteUri
+    } elseif ($response.BaseResponse.RequestMessage -and $response.BaseResponse.RequestMessage.RequestUri) {
+        $finalUri = $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+    }
+    if ($finalUri -and ($finalUri -match "/releases/tag/([^/?#]+)")) {
+        return $matches[1]
+    }
+    throw "could not determine latest voxgate release"
+}
+
 if ($Version -eq "latest") {
-    $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-    $Version = $latest.tag_name
+    $Version = Get-LatestVersion
 }
 if ([string]::IsNullOrWhiteSpace($Version)) {
     throw "could not determine latest voxgate release"

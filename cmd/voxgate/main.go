@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	version = "0.2.7"
+	version = "0.2.8"
 	repo    = "WEIFENG2333/voxgate"
 )
 
@@ -63,6 +63,8 @@ func run(args []string) int {
 		return auth(cfg)
 	case "version", "--version", "-V":
 		return versionCmd(rest[1:])
+	case "update", "upgrade":
+		return updateCmd(rest[1:])
 	case "help", "--help", "-h":
 		usage()
 		return 0
@@ -95,6 +97,7 @@ Usage:
   voxgate [global flags] doctor
   voxgate [global flags] auth
   voxgate version [--check]
+  voxgate update
 
 Global flags:
   --config <file>             YAML config file
@@ -111,5 +114,6 @@ Examples:
   voxgate transcribe sample.m4a --format srt -o out.srt
   cat sample.wav | voxgate transcribe - --stream
   voxgate serve --host 127.0.0.1 --port 8080
+  voxgate update
 `))
 }

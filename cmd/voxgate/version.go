@@ -43,6 +43,37 @@ func versionCmd(args []string) int {
 	return 0
 }
 
+func updateCmd(args []string) int {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 0 {
+		printErr("invalid_args", fmt.Errorf("usage: voxgate update"))
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	latest, err := latestRelease(ctx)
+	if err != nil {
+		printErr("version_check_error", err)
+		return 1
+	}
+	fmt.Println("current", version)
+	fmt.Println("latest", latest)
+	if sameVersion(version, latest) {
+		fmt.Println("status up-to-date")
+		return 0
+	}
+	fmt.Println("status update-available")
+	fmt.Println("run", installCommand())
+	return 0
+}
+
 func latestRelease(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+repo+"/releases/latest", nil)
 	if err != nil {

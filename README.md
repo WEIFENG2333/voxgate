@@ -84,7 +84,10 @@ Check for a newer release:
 
 ```bash
 voxgate version --check
+voxgate update
 ```
+
+`voxgate update` does not update silently on startup. It checks the latest GitHub release and prints the exact install command to run when an update is available. This keeps normal CLI startup offline, fast, and predictable.
 
 ### Verify
 
@@ -241,6 +244,7 @@ voxgate serve
 voxgate doctor
 voxgate auth
 voxgate version
+voxgate update
 ```
 
 Common `transcribe` options:

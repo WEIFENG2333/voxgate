@@ -45,10 +45,20 @@ func TestSubcommandHelpReturnsSuccess(t *testing.T) {
 	for _, args := range [][]string{
 		{"transcribe", "--help"},
 		{"serve", "--help"},
+		{"version", "--help"},
 	} {
 		if got := run(args); got != 0 {
 			t.Fatalf("run(%v) = %d, want 0", args, got)
 		}
+	}
+}
+
+func TestSameVersion(t *testing.T) {
+	if !sameVersion("0.2.7", "v0.2.7") {
+		t.Fatal("expected v-prefixed latest tag to match current version")
+	}
+	if sameVersion("0.2.7", "v0.2.8") {
+		t.Fatal("expected different versions not to match")
 	}
 }
 

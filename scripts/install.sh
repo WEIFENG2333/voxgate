@@ -72,6 +72,17 @@ if [ "$OS" = "windows" ]; then
 fi
 ASSET="voxgate_${OS}_${ARCH}.${EXT}"
 BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
+TARGET="$INSTALL_DIR/voxgate"
+if [ "$OS" = "windows" ]; then
+  TARGET="$INSTALL_DIR/voxgate.exe"
+fi
+if [ -x "$TARGET" ]; then
+  CURRENT="$("$TARGET" version 2>/dev/null | sed -n 's/^voxgate //p' | head -n 1 || true)"
+  if [ -n "$CURRENT" ] && { [ "$CURRENT" = "$VERSION" ] || [ "v$CURRENT" = "$VERSION" ]; }; then
+    echo "voxgate $CURRENT is already installed at $TARGET"
+    exit 0
+  fi
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
@@ -102,10 +113,6 @@ if [ -z "${BIN:-}" ]; then
   exit 1
 fi
 
-TARGET="$INSTALL_DIR/voxgate"
-if [ "$OS" = "windows" ]; then
-  TARGET="$INSTALL_DIR/voxgate.exe"
-fi
 cp "$BIN" "$TARGET"
 chmod +x "$TARGET" 2>/dev/null || true
 if [ "$OS" = "windows" ]; then

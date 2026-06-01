@@ -40,6 +40,18 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 $arch = Get-AssetArch
 $asset = "voxgate_windows_$arch.zip"
 $baseUrl = "https://github.com/$Repo/releases/download/$Version"
+$target = Join-Path $InstallDir "voxgate.exe"
+if (Test-Path $target) {
+    try {
+        $current = (& $target version 2>$null) -replace "^voxgate\s+", ""
+        if ($current -and (($current -eq $Version) -or ("v$current" -eq $Version))) {
+            Write-Host "voxgate $current is already installed at $target"
+            exit 0
+        }
+    } catch {
+        # Continue with reinstall if the existing binary cannot report a version.
+    }
+}
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("voxgate-install-" + [Guid]::NewGuid().ToString("N"))
 $zipPath = Join-Path $tmp $asset
 $checksumPath = Join-Path $tmp "checksums.txt"
@@ -70,12 +82,12 @@ try {
     if (-not $exe) {
         throw "voxgate.exe not found in release archive"
     }
-    Copy-Item $exe.FullName (Join-Path $InstallDir "voxgate.exe") -Force
+    Copy-Item $exe.FullName $target -Force
     Get-ChildItem -Path $extractDir -Recurse -Filter "*.dll" | ForEach-Object {
         Copy-Item $_.FullName $InstallDir -Force
     }
 
-    Write-Host "Installed: $(Join-Path $InstallDir 'voxgate.exe')"
+    Write-Host "Installed: $target"
     if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
         Write-Warning "ffmpeg is not on PATH. Install it with: winget install Gyan.FFmpeg"
     }

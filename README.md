@@ -26,6 +26,8 @@ By default this installs to `~/.local/bin`. To choose another directory:
 curl -fsSL https://raw.githubusercontent.com/WEIFENG2333/voxgate/main/scripts/install.sh | VOXGATE_INSTALL_DIR=/usr/local/bin sh
 ```
 
+Run the same command again to upgrade to the latest release. If the installed binary is already current, the installer exits without downloading the archive.
+
 ### Windows PowerShell install
 
 Install `ffmpeg` first:
@@ -39,6 +41,8 @@ Then install `voxgate` from the latest GitHub Release:
 ```powershell
 irm https://raw.githubusercontent.com/WEIFENG2333/voxgate/main/scripts/install.ps1 | iex
 ```
+
+Run the same command again to upgrade to the latest release. If the installed binary is already current, the installer exits without downloading the archive.
 
 The default install directory is:
 
@@ -84,6 +88,12 @@ Run a health check:
 
 ```bash
 voxgate doctor
+```
+
+Check whether a newer release is available:
+
+```bash
+voxgate version --check
 ```
 
 ### Install from source

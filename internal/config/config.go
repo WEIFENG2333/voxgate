@@ -2,14 +2,13 @@ package config
 
 import (
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/paths"
 )
 
 const DefaultServerRequestTimeout = 10 * time.Minute
@@ -100,10 +99,5 @@ func ServerRequestTimeout(c Config) time.Duration {
 }
 
 func ExpandPath(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
-		}
-	}
-	return path
+	return paths.Expand(path)
 }

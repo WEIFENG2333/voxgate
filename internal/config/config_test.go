@@ -45,6 +45,25 @@ func TestLoadExpandsCredentialPath(t *testing.T) {
 	}
 }
 
+func TestExpandPathSupportsWindowsStyleEnvAndHome(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AppData", configDir)
+
+	tests := map[string]string{
+		`~\voxgate\credentials.json`:         filepath.Join(home, "voxgate", "credentials.json"),
+		`%AppData%/voxgate/credentials.json`: filepath.Join(configDir, "voxgate", "credentials.json"),
+	}
+	for input, want := range tests {
+		if got := filepath.Clean(ExpandPath(input)); got != filepath.Clean(want) {
+			t.Fatalf("ExpandPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestServerRequestTimeout(t *testing.T) {
 	c := Default()
 	c.Server.RequestTimeout = "2m"

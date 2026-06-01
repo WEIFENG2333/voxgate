@@ -82,7 +82,7 @@ Runtime dependencies:
 |---|---|
 | Ubuntu/Debian | `sudo apt-get install -y ffmpeg libopus0` |
 | macOS | `brew install ffmpeg opus` |
-| Windows | `winget install Gyan.FFmpeg`; release zip includes `voxgate.exe` and libopus DLLs |
+| Windows x64 | `winget install Gyan.FFmpeg`; release zip includes `voxgate.exe` and libopus DLLs |
 
 Run a health check:
 
@@ -300,6 +300,10 @@ flags > environment variables > YAML config > defaults
 Example config:
 
 ```yaml
+# Optional. Defaults to the OS user config directory:
+# Linux: ~/.config/voxgate/credentials.json
+# macOS: ~/Library/Application Support/voxgate/credentials.json
+# Windows: %AppData%\voxgate\credentials.json
 credential_path: ~/.config/voxgate/credentials.json
 asr:
   enable_punctuation: true

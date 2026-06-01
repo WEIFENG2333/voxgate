@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/WEIFENG2333/voxgate/internal/paths"
 	"gopkg.in/hraban/opus.v2"
 )
 
@@ -87,7 +88,7 @@ func ConvertBytes(ctx context.Context, data []byte, sourceRate int) (*Source, er
 
 func ffmpegPath() string {
 	if path := os.Getenv("VOXGATE_FFMPEG"); path != "" {
-		return path
+		return paths.Expand(path)
 	}
 	return "ffmpeg"
 }

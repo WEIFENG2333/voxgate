@@ -3,7 +3,14 @@ set -eu
 
 REPO="${VOXGATE_REPO:-WEIFENG2333/voxgate}"
 VERSION="${VOXGATE_VERSION:-latest}"
-INSTALL_DIR="${VOXGATE_INSTALL_DIR:-$HOME/.local/bin}"
+if [ -n "${VOXGATE_INSTALL_DIR:-}" ]; then
+  INSTALL_DIR="$VOXGATE_INSTALL_DIR"
+elif [ -n "${HOME:-}" ]; then
+  INSTALL_DIR="$HOME/.local/bin"
+else
+  echo "error: HOME is not set; set VOXGATE_INSTALL_DIR to choose an install directory" >&2
+  exit 1
+fi
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -55,9 +62,16 @@ download() {
 need uname
 need sed
 need mktemp
+need head
+need find
+need grep
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
+if [ "$OS" = "windows" ] && [ "$ARCH" = "arm64" ]; then
+  echo "error: Windows ARM64 release asset is not published yet; install a compatible voxgate.exe manually" >&2
+  exit 1
+fi
 if [ "$VERSION" = "latest" ]; then
   VERSION="$(latest_version)"
 fi

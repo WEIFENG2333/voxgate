@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/WEIFENG2333/voxgate/internal/paths"
 	"github.com/google/uuid"
 )
 
@@ -47,8 +48,8 @@ type CredentialManager struct {
 }
 
 func DefaultCredentialPath() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".config", "voxgate", "credentials.json")
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, "voxgate", "credentials.json")
 	}
 	return filepath.Join(os.TempDir(), "voxgate-credentials.json")
 }
@@ -113,7 +114,7 @@ func LoadCredentials(path string) (Credentials, error) {
 	if path == "" {
 		path = DefaultCredentialPath()
 	}
-	data, err := os.ReadFile(expandHome(path))
+	data, err := os.ReadFile(paths.Expand(path))
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -128,7 +129,7 @@ func SaveCredentials(path string, creds Credentials) error {
 	if path == "" {
 		path = DefaultCredentialPath()
 	}
-	path = expandHome(path)
+	path = paths.Expand(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -243,15 +244,6 @@ func (m CredentialManager) FetchToken(ctx context.Context, deviceID, cdid string
 		return "", errors.New("settings: missing asr_config.app_key")
 	}
 	return out.Data.Settings.ASRConfig.AppKey, nil
-}
-
-func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return path
 }
 
 func randomHex(n int) (string, error) {

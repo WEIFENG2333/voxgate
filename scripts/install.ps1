@@ -13,13 +13,20 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = "latest"
 }
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-    $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\voxgate"
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\voxgate"
+    } else {
+        $InstallDir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Programs\voxgate"
+    }
+}
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    throw "could not determine install directory; set VOXGATE_INSTALL_DIR"
 }
 
 function Get-AssetArch {
     switch ($env:PROCESSOR_ARCHITECTURE) {
         "AMD64" { return "amd64" }
-        "ARM64" { return "arm64" }
+        "ARM64" { throw "Windows ARM64 release asset is not published yet; set VOXGATE_INSTALL_DIR and install a compatible voxgate.exe manually" }
         default {
             if ([Environment]::Is64BitOperatingSystem) {
                 return "amd64"

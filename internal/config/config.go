@@ -14,6 +14,9 @@ import (
 
 const DefaultServerRequestTimeout = 10 * time.Minute
 
+// DefaultLiveRequestTimeout 是实时输入（stdin 流）的兜底超时，避免用户忘记关闭后无限等待。
+const DefaultLiveRequestTimeout = 20 * time.Minute
+
 type Config struct {
 	CredentialPath string `yaml:"credential_path"`
 	LogLevel       string `yaml:"log_level"`

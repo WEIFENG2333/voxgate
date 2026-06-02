@@ -151,11 +151,11 @@ func flagWasSet(fs *flag.FlagSet, name string) bool {
 	return seen
 }
 
-// liveRequestTimeout 对实时 stdin 流禁用请求超时（除非用户显式指定）：
-// 实时输入时长不定，固定超时会过早切断。
+// liveRequestTimeout 为实时 stdin 流提供兜底超时：用户未显式指定时用一个较长的默认值，
+// 避免忘记关闭后无限等待；显式 --request-timeout 0 仍可关闭超时。
 func liveRequestTimeout(timeout time.Duration, liveInput, timeoutSet bool) time.Duration {
 	if liveInput && !timeoutSet {
-		return 0
+		return config.DefaultLiveRequestTimeout
 	}
 	return timeout
 }

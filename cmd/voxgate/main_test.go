@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
+	"github.com/WEIFENG2333/voxgate/internal/config"
 	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
@@ -120,8 +121,8 @@ func TestIsLiveStdinStream(t *testing.T) {
 }
 
 func TestLiveRequestTimeout(t *testing.T) {
-	if got := liveRequestTimeout(10*time.Minute, true, false); got != 0 {
-		t.Fatalf("live default timeout = %v, want disabled", got)
+	if got := liveRequestTimeout(10*time.Minute, true, false); got != config.DefaultLiveRequestTimeout {
+		t.Fatalf("live default timeout = %v, want %v", got, config.DefaultLiveRequestTimeout)
 	}
 	if got := liveRequestTimeout(30*time.Second, true, true); got != 30*time.Second {
 		t.Fatalf("live explicit timeout = %v, want 30s", got)

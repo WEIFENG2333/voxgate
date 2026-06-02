@@ -211,9 +211,20 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	select {
 	case err := <-sendErr:
 		if err != nil {
-			stopRecv()
-			waitRecv()
-			return false, stats.wrap("send audio", err)
+			// send 写失败常因服务端已收完音频、识别完成后主动关闭连接（broken pipe）。
+			// 优先看 recv：已拿到完整结果则视为成功，忽略 send 错误。
+			select {
+			case rerr := <-recvErr:
+				stopRecv()
+				if rerr != nil {
+					return false, stats.wrap("receive upstream response", rerr)
+				}
+				return false, nil
+			case <-time.After(finishSessionWaitTimeout):
+				stopRecv()
+				waitRecv()
+				return false, stats.wrap("send audio", err)
+			}
 		}
 		close(finishedSending)
 		// After FinishSession the backend may close without an explicit final

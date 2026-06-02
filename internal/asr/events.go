@@ -5,31 +5,40 @@ import "time"
 type EventType string
 
 const (
-	EventTaskStarted     EventType = "task.started"
-	EventSessionStarted  EventType = "session.started"
-	EventVADStart        EventType = "vad.start"
-	EventTranscriptDelta EventType = "transcript.delta"
-	EventTranscriptFinal EventType = "transcript.final"
-	EventStreamDone      EventType = "stream.done"
-	EventError           EventType = "error"
+	EventTaskStarted      EventType = "task.started"
+	EventSessionStarted   EventType = "session.started"
+	EventVADStart         EventType = "speech.started"
+	EventTranscriptUpdate EventType = "transcript.text.update"
+	EventTranscriptDelta  EventType = "transcript.text.delta"
+	EventSegmentStable    EventType = "transcript.segment.stable"
+	EventTranscriptDone   EventType = "transcript.text.done"
+	EventError            EventType = "error"
 )
 
 // Event is the internal streaming envelope used by the CLI, SSE endpoint, and
-// Realtime compatibility layer. Transcript final means one utterance is stable;
-// stream done means the input source has ended.
+// Realtime compatibility layer. Delta and update events describe the full
+// editable transcript snapshot. Segment stable exposes the upstream's stable
+// recognition phase; Text and Snapshot both carry the stable full transcript
+// view. Transcript done is the only immutable full transcript event.
 type Event struct {
-	Type        EventType      `json:"type"`
-	RequestID   string         `json:"request_id,omitempty"`
-	Text        string         `json:"text,omitempty"`
-	IsInterim   bool           `json:"is_interim,omitempty"`
-	Start       float64        `json:"start,omitempty"`
-	End         float64        `json:"end,omitempty"`
-	Duration    float64        `json:"duration,omitempty"`
-	TimestampMS int64          `json:"timestamp_ms,omitempty"`
-	Error       *ErrorPayload  `json:"error,omitempty"`
-	Results     []ASRResult    `json:"results,omitempty"`
-	Extra       *ASRExtra      `json:"extra,omitempty"`
-	Raw         map[string]any `json:"-"`
+	Type         EventType      `json:"type"`
+	RequestID    string         `json:"request_id,omitempty"`
+	Text         string         `json:"text,omitempty"`
+	Delta        string         `json:"delta,omitempty"`
+	Snapshot     string         `json:"snapshot,omitempty"`
+	UtteranceID  string         `json:"utterance_id,omitempty"`
+	Revision     int            `json:"revision,omitempty"`
+	IsInterim    bool           `json:"is_interim,omitempty"`
+	Start        float64        `json:"start,omitempty"`
+	End          float64        `json:"end,omitempty"`
+	AudioStartMS int64          `json:"audio_start_ms,omitempty"`
+	AudioEndMS   int64          `json:"audio_end_ms,omitempty"`
+	Duration     float64        `json:"duration,omitempty"`
+	TimestampMS  int64          `json:"timestamp_ms,omitempty"`
+	Error        *ErrorPayload  `json:"error,omitempty"`
+	Results      []ASRResult    `json:"results,omitempty"`
+	Extra        *ASRExtra      `json:"extra,omitempty"`
+	Raw          map[string]any `json:"-"`
 }
 
 type ErrorPayload struct {
@@ -79,14 +88,15 @@ type Alternative struct {
 }
 
 type ASRResult struct {
-	Text          string        `json:"text"`
-	Start         float64       `json:"start_time,omitempty"`
-	End           float64       `json:"end_time,omitempty"`
-	Confidence    float64       `json:"confidence,omitempty"`
-	Alternatives  []Alternative `json:"alternatives,omitempty"`
-	IsInterim     bool          `json:"is_interim"`
-	IsVADFinished bool          `json:"is_vad_finished,omitempty"`
-	Index         int           `json:"index"`
+	Text            string        `json:"text"`
+	Start           float64       `json:"start_time,omitempty"`
+	End             float64       `json:"end_time,omitempty"`
+	Confidence      float64       `json:"confidence,omitempty"`
+	Alternatives    []Alternative `json:"alternatives,omitempty"`
+	IsInterim       bool          `json:"is_interim"`
+	IsVADFinished   bool          `json:"is_vad_finished,omitempty"`
+	NonstreamResult bool          `json:"nonstream_result,omitempty"`
+	Index           int           `json:"index"`
 }
 
 type ASRExtra struct {

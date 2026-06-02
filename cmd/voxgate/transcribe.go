@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -80,6 +82,17 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		w = f
 	}
 	ctx := context.Background()
+	signalCtx, cancelSignal := context.WithCancel(context.Background())
+	defer cancelSignal()
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		cancelSignal()
+		<-sigCh
+		os.Exit(130)
+	}()
 	svc := transcription.FromAppConfig(cfg)
 	svc.Config.ChunkDuration = *chunkDuration
 	traceWriter, err := openTraceWriter(g.traceASRPath)
@@ -103,7 +116,11 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	})
 	opts.RequestTimeout = liveRequestTimeout(opts.RequestTimeout, liveInput, requestTimeoutSet)
 	if *stream {
-		events, err := streamEvents(ctx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
+		streamCtx := signalCtx
+		if liveInput {
+			streamCtx = ctx
+		}
+		events, err := streamEvents(streamCtx, signalCtx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
 		if err != nil {
 			printErr(streamErrorCode(err), err)
 			return streamErrorExitCode(err)
@@ -115,7 +132,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		printErr("audio_error", err)
 		return 5
 	}
-	result, err := svc.Transcribe(ctx, src, opts, !*noChunk)
+	result, err := svc.Transcribe(signalCtx, src, opts, !*noChunk)
 	if err != nil {
 		printErr("asr_error", err)
 		return 1
@@ -150,12 +167,16 @@ func liveRequestTimeout(timeout time.Duration, liveInput, timeoutSet bool) time.
 	return timeout
 }
 
-func streamEvents(ctx context.Context, svc transcription.Service, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {
+func streamEvents(ctx, stopCtx context.Context, svc transcription.Service, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {
 	if liveInput {
 		if sampleRate != 0 && sampleRate != audio.SampleRate {
 			return nil, errLiveStdinSampleRate
 		}
 		src := audio.NewLiveSource()
+		go func() {
+			<-stopCtx.Done()
+			src.CloseWrite()
+		}()
 		go copyStdinPCM(src)
 		return svc.StreamFrames(ctx, src, opts)
 	}
@@ -214,6 +235,9 @@ type textStreamDisplay struct {
 
 func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStreamDisplay) int {
 	lineOpen := false
+	committedRunes := 0
+	currentLine := ""
+	currentSnapshotRunes := 0
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			if display.Interactive && lineOpen {
@@ -226,24 +250,79 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 			return 1
 		}
 		switch ev.Type {
+		case asr.EventTranscriptUpdate:
+			if !display.Interactive {
+				continue
+			}
+			preview := ev.Text
+			if ev.Snapshot != "" {
+				preview = display.pendingText(committedRunes, ev.Snapshot)
+				currentSnapshotRunes = runeLen(ev.Snapshot)
+			} else {
+				currentSnapshotRunes = committedRunes + runeLen(preview)
+			}
+			if _, err := fmt.Fprintf(w, "\r\033[2K%s", display.preview(preview)); err != nil {
+				printErr("format_error", err)
+				return 1
+			}
+			currentLine = preview
+			lineOpen = true
 		case asr.EventTranscriptDelta:
 			if !display.Interactive {
 				continue
 			}
-			if _, err := fmt.Fprintf(w, "\r\033[2K%s", display.preview(ev.Text)); err != nil {
+			preview := ev.Text
+			if ev.Snapshot != "" {
+				preview = display.pendingText(committedRunes, ev.Snapshot)
+				currentSnapshotRunes = runeLen(ev.Snapshot)
+			} else {
+				currentSnapshotRunes = committedRunes + runeLen(preview)
+			}
+			if _, err := fmt.Fprintf(w, "\r\033[2K%s", display.preview(preview)); err != nil {
 				printErr("format_error", err)
 				return 1
 			}
+			currentLine = preview
 			lineOpen = true
-		case asr.EventTranscriptFinal:
-			if display.Interactive && lineOpen {
+		case asr.EventSegmentStable:
+			if !display.Interactive {
+				continue
+			}
+			if lineOpen {
 				if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
 					printErr("format_error", err)
 					return 1
 				}
 				lineOpen = false
 			}
-			if _, err := fmt.Fprintln(w, ev.Text); err != nil {
+			if currentLine != "" {
+				if _, err := fmt.Fprintln(w, currentLine); err != nil {
+					printErr("format_error", err)
+					return 1
+				}
+			}
+			if currentSnapshotRunes > committedRunes {
+				committedRunes = currentSnapshotRunes
+			}
+			currentLine = ""
+			currentSnapshotRunes = committedRunes
+		case asr.EventTranscriptDone:
+			if display.Interactive && lineOpen {
+				if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
+					printErr("format_error", err)
+					return 1
+				}
+				lineOpen = false
+				currentLine = ""
+			}
+			doneText := ev.Text
+			if display.Interactive {
+				doneText = display.pendingText(committedRunes, ev.Text)
+			}
+			if doneText == "" {
+				continue
+			}
+			if _, err := fmt.Fprintln(w, doneText); err != nil {
 				printErr("format_error", err)
 				return 1
 			}
@@ -256,6 +335,21 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 		}
 	}
 	return 0
+}
+
+func (d textStreamDisplay) pendingText(committedRunes int, snapshot string) string {
+	if committedRunes <= 0 {
+		return snapshot
+	}
+	runes := []rune(snapshot)
+	if committedRunes >= len(runes) {
+		return ""
+	}
+	return string(runes[committedRunes:])
+}
+
+func runeLen(s string) int {
+	return len([]rune(s))
 }
 
 func (d textStreamDisplay) preview(text string) string {

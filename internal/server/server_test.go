@@ -194,6 +194,67 @@ func TestRealtimeTranscriptionStreamsBeforeCommit(t *testing.T) {
 	t.Fatal("did not receive transcription delta before commit")
 }
 
+func TestRealtimeTranscriptionEmitsAppendOnlyDeltas(t *testing.T) {
+	wsURL, closeWS := mockASRRevisionServer(t, []string{"你", "你好", "你好呀"}, "你好呀。")
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http")+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var msg map[string]any
+	_ = conn.ReadJSON(&msg)
+	pcm := minimalPCM()
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var deltas []string
+	var completed string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			var netErr interface{ Timeout() bool }
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+			t.Fatal(err)
+		}
+		switch msg["type"] {
+		case "conversation.item.input_audio_transcription.delta":
+			deltas = append(deltas, msg["delta"].(string))
+		case "conversation.item.input_audio_transcription.completed":
+			completed = msg["transcript"].(string)
+			t.Logf("realtime deltas=%q completed=%q", deltas, completed)
+			if got := strings.Join(deltas, ""); got != completed {
+				t.Fatalf("joined realtime deltas = %q, completed = %q, deltas = %#v", got, completed, deltas)
+			}
+			if strings.Join(deltas, "|") != "你|好|呀|。" {
+				t.Fatalf("deltas = %#v, want append-only character deltas", deltas)
+			}
+			return
+		case "error", "conversation.item.input_audio_transcription.failed":
+			t.Fatalf("unexpected realtime error: %v", msg)
+		}
+	}
+	t.Fatal("did not receive realtime completed event")
+}
+
 func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
 	wsURL, closeWS := mockASRAutoCompleteServer(t, []string{"第一段", "第二段"})
 	defer closeWS()
@@ -362,6 +423,7 @@ func mockASRServer(t *testing.T, finalText string) (string, func()) {
 			if req == "FinishSession" {
 				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": finalText, "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
 				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 				return
 			}
 		}
@@ -392,6 +454,49 @@ func mockASRStreamingServer(t *testing.T) (string, func()) {
 			if req == "TaskRequest" {
 				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": "早期增量", "is_interim": true}}})
 				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}
+		}
+	}))
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close
+}
+
+func mockASRRevisionServer(t *testing.T, revisions []string, finalText string) (string, func()) {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		revision := 0
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			req, _ := parseRequestMethod(data)
+			switch req {
+			case "TaskRequest":
+				if revision < len(revisions) {
+					payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": revisions[revision], "is_interim": true, "index": 0}}})
+					_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
+					revision++
+				}
+			case "FinishSession":
+				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": finalText, "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 				return
 			}
 		}

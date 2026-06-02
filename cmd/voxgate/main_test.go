@@ -132,17 +132,17 @@ func TestLiveRequestTimeout(t *testing.T) {
 }
 
 func TestStreamEventsRejectsLiveStdinSampleRate(t *testing.T) {
-	_, err := streamEvents(context.Background(), transcription.Service{}, "-", "pcm16", 8000, asr.Options{}, true, true)
+	_, err := streamEvents(context.Background(), context.Background(), transcription.Service{}, "-", "pcm16", 8000, asr.Options{}, true, true)
 	if !errors.Is(err, errLiveStdinSampleRate) {
 		t.Fatalf("streamEvents error = %v, want errLiveStdinSampleRate", err)
 	}
 }
 
-func TestWriteTextStreamEventsPipeWritesFinalLinesOnly(t *testing.T) {
+func TestWriteTextStreamEventsPipeWritesDoneLinesOnly(t *testing.T) {
 	events := make(chan asr.Event, 3)
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你"}
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好"}
-	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "你好。"}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "你好。"}
 	close(events)
 
 	var buf bytes.Buffer
@@ -158,7 +158,7 @@ func TestWriteTextStreamEventsIgnoresShorterInterimText(t *testing.T) {
 	events := make(chan asr.Event, 3)
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好啊"}
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好"}
-	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "你好。"}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "你好。"}
 	close(events)
 
 	var buf bytes.Buffer
@@ -167,6 +167,51 @@ func TestWriteTextStreamEventsIgnoresShorterInterimText(t *testing.T) {
 		t.Fatalf("exit = %d, want 0", got)
 	}
 	if got, want := buf.String(), "\r\033[2K你好啊\r\033[2K你好\r\033[2K你好。\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestWriteTextStreamEventsStartsNewLineAfterStableSegment(t *testing.T) {
+	events := make(chan asr.Event, 8)
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "你好"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "你好。"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "ignored stable text", Snapshot: "ignored stable snapshot"}
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "你好。我"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "你好。我最近"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "你好。我最近。"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "ignored stable text", Snapshot: "ignored stable snapshot"}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "你好。我最近。"}
+	close(events)
+
+	var buf bytes.Buffer
+	display := textStreamDisplay{Interactive: true, Width: 80}
+	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	want := "\r\033[2K你好\r\033[2K你好。\r\033[2K你好。\n\r\033[2K我\r\033[2K我最近\r\033[2K我最近。\r\033[2K我最近。\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestWriteTextStreamEventsDoesNotReplayStablePrefixRevisions(t *testing.T) {
+	events := make(chan asr.Event, 7)
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "我看看现在的效果怎么样"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "我看看现在的效果怎么样？"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "ignored stable text", Snapshot: "确实。"}
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "我看看现在的效果怎么样。确实"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "我看看现在的效果怎么样。确实，现在不错。"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "ignored stable text", Snapshot: "我看看现在的效果怎么样。确实，现在不错。"}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "我看看现在的效果怎么样。确实，现在不错。"}
+	close(events)
+
+	var buf bytes.Buffer
+	display := textStreamDisplay{Interactive: true, Width: 120}
+	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	want := "\r\033[2K我看看现在的效果怎么样\r\033[2K我看看现在的效果怎么样？\r\033[2K我看看现在的效果怎么样？\n\r\033[2K确实\r\033[2K确实，现在不错。\r\033[2K确实，现在不错。\n"
+	if got := buf.String(); got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }

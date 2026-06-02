@@ -2,12 +2,12 @@ package asr
 
 import "testing"
 
-func TestParseThreePassFinal(t *testing.T) {
+func TestParseThreePassStable(t *testing.T) {
 	got, err := ParseResultJSON(`{"results":[{"text":"你好","is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Kind != ParsedFinal || got.Text != "你好" {
+	if got.Kind != ParsedStable || got.Text != "你好" {
 		t.Fatalf("bad parse: %+v", got)
 	}
 }
@@ -47,7 +47,7 @@ func TestParseRichResultMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Kind != ParsedFinal || got.Text != "你好" || len(got.Results) != 1 {
+	if got.Kind != ParsedStable || got.Text != "你好" || len(got.Results) != 1 {
 		t.Fatalf("bad parse: %+v", got)
 	}
 	res := got.Results[0]
@@ -59,5 +59,33 @@ func TestParseRichResultMetadata(t *testing.T) {
 	}
 	if got.Extra.ModelAvgRTF == nil || *got.Extra.ModelAvgRTF != 0.12 || got.Extra.ModelTotalProcessTime == nil {
 		t.Fatalf("missing extra metadata: %+v", got.Extra)
+	}
+}
+
+func TestParseMultiResultSelectsCurrentUtterance(t *testing.T) {
+	got, err := ParseResultJSON(`{
+		"results":[
+			{"text":"你好呀。我觉得今天的天气不错。","end_time":33.032,"is_interim":true,"index":0},
+			{"text":"我觉得今天的天气不错。","start_time":17.702,"end_time":33.032,"is_interim":true,"index":0}
+		]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != ParsedInterim || got.Text != "我觉得今天的天气不错。" {
+		t.Fatalf("bad selected result: %+v", got)
+	}
+	if len(got.Results) != 2 {
+		t.Fatalf("raw results lost: %+v", got.Results)
+	}
+}
+
+func TestParseStablePreservesNonstreamMetadata(t *testing.T) {
+	got, err := ParseResultJSON(`{"results":[{"text":"完成","is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != ParsedStable || !got.NonstreamResult || len(got.Results) != 1 || !got.Results[0].NonstreamResult {
+		t.Fatalf("bad stable metadata: %+v", got)
 	}
 }

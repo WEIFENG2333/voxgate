@@ -95,6 +95,19 @@ func TestTranscribeRejectsSubtitleStreamingFormat(t *testing.T) {
 	}
 }
 
+func TestReorderTranscribeArgsKeepsHotwordsValue(t *testing.T) {
+	got := reorderTranscribeArgs([]string{"audio.wav", "--hotwords", "Claude Code,Anthropic", "--format", "json"})
+	want := []string{"--hotwords", "Claude Code,Anthropic", "--format", "json", "audio.wav"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func TestIsLiveStdinStream(t *testing.T) {
 	tests := []struct {
 		name        string

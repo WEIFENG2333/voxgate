@@ -2,7 +2,12 @@ package transcription
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/WEIFENG2333/voxgate/internal/asr"
@@ -18,6 +23,8 @@ type Config struct {
 	EnablePunctuation bool
 	EnableThreePass   bool
 	EnableTwoPass     bool
+	Hotwords          []string
+	HotwordReporter   func(context.Context, []string) error
 	RequestTimeout    time.Duration
 	ChunkDuration     time.Duration
 	TraceWriter       io.Writer
@@ -55,6 +62,7 @@ func FromAppConfig(cfg config.Config) Service {
 		EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass:   cfg.ASR.EnableThreePass,
 		EnableTwoPass:     cfg.ASR.EnableTwoPass,
+		Hotwords:          cfg.ASR.Hotwords,
 		RequestTimeout:    config.ServerRequestTimeout(cfg),
 	})
 }
@@ -75,6 +83,164 @@ func (s Service) Options(in OptionInput) asr.Options {
 	}
 	opts.Realtime = in.Realtime
 	return opts
+}
+
+func (s Service) ReportHotwords(ctx context.Context) error {
+	words := normalizeHotwords(s.Config.Hotwords)
+	if len(words) == 0 {
+		return nil
+	}
+	cachePath := hotwordCachePath(s.Config.CredentialPath)
+	if creds, err := asr.LoadCredentials(s.Config.CredentialPath); err == nil && creds.DeviceID != "" {
+		cache := loadHotwordCache(cachePath, creds.DeviceID)
+		if len(cache.missing(words)) == 0 {
+			return nil
+		}
+	}
+	manager := asr.CredentialManager{
+		Path:      s.Config.CredentialPath,
+		UserAgent: s.Config.UserAgent,
+	}
+	creds, err := manager.Ensure(ctx, false)
+	if err != nil {
+		return err
+	}
+	cache := loadHotwordCache(cachePath, creds.DeviceID)
+	missing := cache.missing(words)
+	if len(missing) == 0 {
+		return nil
+	}
+	if s.Config.HotwordReporter != nil {
+		err = s.Config.HotwordReporter(ctx, missing)
+	} else {
+		err = asr.NewContextClient(creds, s.Config.UserAgent, nil).ReportUserWords(ctx, missing)
+	}
+	if err != nil {
+		return err
+	}
+	cache.add(missing)
+	return saveHotwordCache(cachePath, cache)
+}
+
+func (s Service) ReportHotwordsAsync(ctx context.Context) func() {
+	if len(s.Config.Hotwords) == 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reportCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if err := s.ReportHotwords(reportCtx); err != nil {
+			log.Printf("voxgate: hotwords report failed: %v", err)
+		}
+	}()
+	return func() {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+func normalizeHotwords(words []string) []string {
+	out := make([]string, 0, len(words))
+	seen := map[string]struct{}{}
+	for _, word := range words {
+		word = strings.TrimSpace(word)
+		if word == "" {
+			continue
+		}
+		if _, ok := seen[word]; ok {
+			continue
+		}
+		seen[word] = struct{}{}
+		out = append(out, word)
+	}
+	return out
+}
+
+type hotwordCache struct {
+	DeviceID    string   `json:"device_id"`
+	Words       []string `json:"words"`
+	UpdatedAtMS int64    `json:"updated_at_ms"`
+}
+
+func hotwordCachePath(credentialPath string) string {
+	if credentialPath == "" {
+		credentialPath = asr.DefaultCredentialPath()
+	}
+	path := config.ExpandPath(credentialPath)
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + ".hotwords.json"
+	}
+	return strings.TrimSuffix(path, ext) + ".hotwords.json"
+}
+
+func loadHotwordCache(path, deviceID string) hotwordCache {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return hotwordCache{DeviceID: deviceID}
+	}
+	var cache hotwordCache
+	if err := json.Unmarshal(data, &cache); err != nil || cache.DeviceID != deviceID {
+		return hotwordCache{DeviceID: deviceID}
+	}
+	cache.Words = normalizeHotwords(cache.Words)
+	return cache
+}
+
+func saveHotwordCache(path string, cache hotwordCache) error {
+	cache.Words = normalizeHotwords(cache.Words)
+	cache.UpdatedAtMS = time.Now().UnixMilli()
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".hotwords-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func (c hotwordCache) missing(words []string) []string {
+	seen := map[string]struct{}{}
+	for _, word := range c.Words {
+		seen[word] = struct{}{}
+	}
+	var missing []string
+	for _, word := range words {
+		if _, ok := seen[word]; ok {
+			continue
+		}
+		seen[word] = struct{}{}
+		missing = append(missing, word)
+	}
+	return missing
+}
+
+func (c *hotwordCache) add(words []string) {
+	c.Words = append(c.Words, words...)
+	c.Words = normalizeHotwords(c.Words)
 }
 
 func (s Service) Runner() transcriber.Runner {

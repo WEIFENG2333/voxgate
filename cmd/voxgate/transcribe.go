@@ -31,6 +31,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	language := fs.String("language", "zh", "language hint")
 	fs.StringVar(language, "l", "zh", "language hint")
 	prompt := fs.String("prompt", "", "prompt/hotwords hint")
+	hotwords := fs.String("hotwords", "", "comma-separated hotwords to boost recognition")
 	noPunc := fs.Bool("no-punctuation", false, "disable punctuation")
 	disableThreePass := fs.Bool("disable-three-pass", false, "disable third pass")
 	outPath := fs.String("output", "", "write output to file")
@@ -95,6 +96,9 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	}()
 	svc := transcription.FromAppConfig(cfg)
 	svc.Config.ChunkDuration = *chunkDuration
+	if *hotwords != "" {
+		svc.Config.Hotwords = config.SplitList(*hotwords)
+	}
 	traceWriter, err := openTraceWriter(g.traceASRPath)
 	if err != nil {
 		printErr("trace_error", err)
@@ -119,11 +123,28 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		streamCtx := signalCtx
 		if liveInput {
 			streamCtx = ctx
+			if err := reportHotwordsBestEffort(signalCtx, svc); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning [hotwords_warning]: %v\n", err)
+			}
+			events, err := streamEvents(streamCtx, signalCtx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, true)
+			if err != nil {
+				printErr(streamErrorCode(err), err)
+				return streamErrorExitCode(err)
+			}
+			return writeStreamEvents(w, chosen, events, display)
 		}
-		events, err := streamEvents(streamCtx, signalCtx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
+		src, err := svc.Open(streamCtx, fs.Arg(0), *inputFormat, *sampleRate)
 		if err != nil {
-			printErr(streamErrorCode(err), err)
-			return streamErrorExitCode(err)
+			printErr("audio_error", err)
+			return 5
+		}
+		if err := reportHotwordsBestEffort(signalCtx, svc); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning [hotwords_warning]: %v\n", err)
+		}
+		events, err := svc.Stream(streamCtx, src, opts, !*noChunk)
+		if err != nil {
+			printErr("asr_error", err)
+			return 1
 		}
 		return writeStreamEvents(w, chosen, events, display)
 	}
@@ -131,6 +152,9 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	if err != nil {
 		printErr("audio_error", err)
 		return 5
+	}
+	if err := reportHotwordsBestEffort(signalCtx, svc); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning [hotwords_warning]: %v\n", err)
 	}
 	result, err := svc.Transcribe(signalCtx, src, opts, !*noChunk)
 	if err != nil {
@@ -165,6 +189,15 @@ func liveRequestTimeout(timeout time.Duration, liveInput, timeoutSet bool) time.
 		return 0
 	}
 	return timeout
+}
+
+func reportHotwordsBestEffort(ctx context.Context, svc transcription.Service) error {
+	if len(svc.Config.Hotwords) == 0 {
+		return nil
+	}
+	reportCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return svc.ReportHotwords(reportCtx)
 }
 
 func streamEvents(ctx, stopCtx context.Context, svc transcription.Service, path, inputFormat string, sampleRate int, opts asr.Options, allowChunking, liveInput bool) (<-chan asr.Event, error) {

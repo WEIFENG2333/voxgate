@@ -125,6 +125,18 @@ Stream incremental events:
 voxgate transcribe speech.wav --stream --format ndjson
 ```
 
+Boost project-specific words before transcription:
+
+```bash
+voxgate transcribe meeting.wav --hotwords "Claude Code,Anthropic,VoxGate"
+VOXGATE_ASR_HOTWORDS="Claude Code,Anthropic,VoxGate" voxgate transcribe meeting.wav
+```
+
+Hotwords are reported best-effort to the upstream personal-word context service
+using the same cached device identity. A reporting failure is shown as a warning
+and does not stop transcription. Successfully reported words are cached per
+device, so later runs only report newly added words.
+
 Streaming NDJSON output uses `speech.started` for VAD start,
 `transcript.text.delta` for append-only text deltas,
 `transcript.text.update` when the editable transcript snapshot is revised,
@@ -258,6 +270,7 @@ Common `transcribe` options:
 | `--format text|json|verbose_json|srt|vtt|ndjson` | output format |
 | `--output <file>` / `-o <file>` | write output to file |
 | `--stream` | stream incremental output |
+| `--hotwords <words>` | comma-separated personal words to report before transcription |
 | `--input-format wav|pcm16|raw` | stdin input format |
 | `--sample-rate <hz>` | raw PCM sample rate |
 | `--request-timeout <duration>` | per-session timeout |

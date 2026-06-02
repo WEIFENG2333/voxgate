@@ -335,13 +335,10 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 				if finalEmitted {
 					return nil
 				}
-				// send 已完成后读到任何错误（超时、连接被关、异常断开）都意味着会话结束；
-				// 期间已收到过结果就合成最终事件。
-				if lastText != "" {
+				// send 已完成后读到任何错误（超时、连接被关、异常断开）都意味着会话结束：
+				// 已收到结果则用之，超时无结果则发空结果收尾。
+				if lastText != "" || isTimeout(err) {
 					events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
-					return nil
-				}
-				if isTimeout(err) {
 					return nil
 				}
 			default:

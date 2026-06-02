@@ -105,9 +105,8 @@ type Options struct {
 	EnableThreePass   bool
 	EnableTwoPass     bool
 	Language          string
-	Prompt            string
+	Prompt            string // 识别上文/提示词，作为 StartSession 的 context
 	RequestTimeout    time.Duration
-	Realtime          bool
 }
 
 func DefaultOptions() Options {

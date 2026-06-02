@@ -11,8 +11,7 @@ type ParsedKind int
 const (
 	ParsedNoop ParsedKind = iota
 	ParsedVADStart
-	ParsedInterim
-	ParsedDefinite
+	ParsedDelta
 	ParsedFinal
 )
 
@@ -20,6 +19,7 @@ const (
 type ParsedResult struct {
 	Kind        ParsedKind
 	Text        string
+	IsInterim   bool
 	Packet      int
 	Raw         map[string]any
 	VADFinished bool
@@ -69,7 +69,7 @@ type resultJSON struct {
 }
 
 // ParseResultJSON decodes the upstream ResultJSON payload and classifies it as
-// VAD, interim, definite, final, or no-op.
+// VAD start, delta (interim), final, or no-op.
 func ParseResultJSON(s string) (ParsedResult, error) {
 	if strings.TrimSpace(s) == "" {
 		return ParsedResult{Kind: ParsedNoop}, nil
@@ -80,19 +80,20 @@ func ParseResultJSON(s string) (ParsedResult, error) {
 	}
 	var raw map[string]any
 	_ = json.Unmarshal([]byte(s), &raw)
-	extra := parseExtra(r)
-	results := parseResults(r)
-	if r.Extra.VADStart {
-		return ParsedResult{Kind: ParsedVADStart, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
-	}
-	if r.Results == nil {
-		return ParsedResult{Kind: ParsedNoop, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
-	}
+	// 同一语音段（index）可能返回多遍识别结果（twopass/threepass）。
+	// 一次遍历完成去重（保留首次出现）、文本拼接与状态提取。
+	seen := make(map[int]bool, len(r.Results))
+	kept := r.Results[:0]
 	var text string
 	isInterim := true
 	vadFinished := false
 	nonstream := false
 	for _, item := range r.Results {
+		if seen[item.Index] {
+			continue
+		}
+		seen[item.Index] = true
+		kept = append(kept, item)
 		text += item.Text
 		if item.IsInterim != nil {
 			isInterim = *item.IsInterim
@@ -102,16 +103,23 @@ func ParseResultJSON(s string) (ParsedResult, error) {
 		vadFinished = item.IsVADFinished
 		nonstream = item.Extra.NonstreamResult
 	}
+	r.Results = kept
+	extra := parseExtra(r)
+	results := parseResults(r)
+	if r.Extra.VADStart {
+		return ParsedResult{Kind: ParsedVADStart, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
+	}
+	if r.Results == nil {
+		return ParsedResult{Kind: ParsedNoop, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
+	}
 	if text == "" {
 		return ParsedResult{Kind: ParsedNoop, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
 	}
+	// 整句结果（nonstream）或 VAD 段已结束的确定结果即为最终，其余都是中间结果。
 	if nonstream || (!isInterim && vadFinished) {
 		return ParsedResult{Kind: ParsedFinal, Text: text, VADFinished: vadFinished, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
 	}
-	if !isInterim {
-		return ParsedResult{Kind: ParsedDefinite, Text: text, VADFinished: vadFinished, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
-	}
-	return ParsedResult{Kind: ParsedInterim, Text: text, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
+	return ParsedResult{Kind: ParsedDelta, Text: text, IsInterim: isInterim, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
 }
 
 func parseExtra(r resultJSON) ASRExtra {

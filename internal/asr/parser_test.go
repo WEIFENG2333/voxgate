@@ -12,6 +12,62 @@ func TestParseThreePassFinal(t *testing.T) {
 	}
 }
 
+func TestParseInterimDelta(t *testing.T) {
+	// 中间结果（is_interim=true）→ Delta，带 IsInterim 标志
+	got, err := ParseResultJSON(`{"results":[{"text":"甚至","is_interim":true,"index":0}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != ParsedDelta || got.Text != "甚至" || !got.IsInterim {
+		t.Fatalf("expected interim delta, got %+v", got)
+	}
+}
+
+func TestParseDefiniteDelta(t *testing.T) {
+	// 已确定但 VAD 段未结束（is_interim=false, 无 vad_finished）→ 仍是 Delta，IsInterim=false
+	got, err := ParseResultJSON(`{"results":[{"text":"甚至出现","is_interim":false,"index":0}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != ParsedDelta || got.IsInterim {
+		t.Fatalf("expected definite delta (not interim), got %+v", got)
+	}
+}
+
+func TestParseDeduplicatesMultiPassByIndex(t *testing.T) {
+	// 同一语音段（index 相同）返回 twopass/threepass 两遍结果，应去重而非拼接
+	got, err := ParseResultJSON(`{"results":[
+		{"text":"甚至出现交易几乎停滞的情况。","is_interim":false,"is_vad_finished":true,"index":0},
+		{"text":"甚至出现交易几乎停滞的情况。","is_interim":false,"index":0}
+	]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != ParsedFinal || got.Text != "甚至出现交易几乎停滞的情况。" {
+		t.Fatalf("expected deduplicated final, got kind=%v text=%q", got.Kind, got.Text)
+	}
+	if len(got.Results) != 1 {
+		t.Fatalf("expected 1 result after dedup, got %d", len(got.Results))
+	}
+}
+
+func TestParseKeepsDistinctIndexes(t *testing.T) {
+	// 不同 index 是不同语音段，应顺序拼接而非去重
+	got, err := ParseResultJSON(`{"results":[
+		{"text":"第一句。","is_interim":false,"is_vad_finished":true,"index":0},
+		{"text":"第二句。","is_interim":false,"is_vad_finished":true,"index":1}
+	]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != "第一句。第二句。" {
+		t.Fatalf("expected concatenated text, got %q", got.Text)
+	}
+	if len(got.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got.Results))
+	}
+}
+
 func TestParseVADStart(t *testing.T) {
 	got, err := ParseResultJSON(`{"extra":{"vad_start":true,"packet_number":7}}`)
 	if err != nil {

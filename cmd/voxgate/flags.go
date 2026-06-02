@@ -43,7 +43,8 @@ func parseGlobal(args []string) (globalFlags, []string, error) {
 func reorderTranscribeArgs(args []string) []string {
 	valueFlags := map[string]bool{
 		"-f": true, "--format": true, "-l": true, "--language": true, "--prompt": true,
-		"-o": true, "--output": true, "--input-format": true, "--sample-rate": true,
+		"--hotwords": true,
+		"-o":         true, "--output": true, "--input-format": true, "--sample-rate": true,
 		"--request-timeout": true, "--chunk-duration": true,
 	}
 	var flagsPart []string

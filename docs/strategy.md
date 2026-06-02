@@ -4,10 +4,12 @@ The backend behaves like an input-method ASR service, not a general long-form ba
 
 ## Confirmed
 
-- Device bootstrap and token retrieval are real and repeatable.
+- Device registration is real and repeatable; the ASR appKey is a built-in constant (no token fetch needed).
 - WebSocket protobuf field numbers `2,3,5,6,7,8,9` are required.
-- Audio must be 16 kHz mono PCM encoded to 20 ms Opus frames.
+- Audio is 16 kHz mono 16-bit, 10 ms per frame; encoded as `speech_opus` (default) or sent as `raw` PCM.
+- The last audio frame carries `{"finish_audio":true}` in its payload (no separate silence frame).
 - `StartTask` and `StartSession` are separate protobuf round trips.
+- Two endpoints (WS / QUIC) behave identically.
 - Recognition JSON has interim, definite, and final variants.
 - VAD text can reset between utterance segments; previous text must be preserved.
 
@@ -21,11 +23,11 @@ Based on local probes, a single session handles short utterances and file inputs
 |---|---|
 | file <= 300 s | one session, fast upload |
 | file > 300 s | automatic 300 s chunks, one session per chunk |
-| realtime | one session, 20 ms pacing |
+| realtime | one session, 10 ms pacing |
 | HTTP non-stream | same chunking policy as CLI |
 | HTTP stream | single session for now; long-stream chunked SSE is not marked stable |
 
-The chunker is currently time based: after ffmpeg normalization to 16 kHz mono PCM, it slices by PCM byte offset and aligns each boundary to a 20 ms Opus frame. It is not silence-aware, does not run VAD before splitting, and does not add overlap.
+The chunker is currently time based: after ffmpeg normalization to 16 kHz mono PCM, it slices by PCM byte offset and aligns each boundary to a 10 ms frame. It is not silence-aware, does not run VAD before splitting, and does not add overlap.
 
 Chunked file transcription is serial. The client opens one WebSocket session for chunk 0, waits for its final result, then opens the next WebSocket session for chunk 1. Chunks are not sent concurrently, and a multi-chunk file is not kept inside one long WebSocket session. This keeps ordering, retry handling, and backend throttling behavior predictable.
 

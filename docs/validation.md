@@ -26,6 +26,13 @@ Passed packages:
 - HTTP JSON and SSE endpoints with mock WebSocket backend
 - CLI help and early format validation
 
+## Post-Refactor Validation (aligned to APK v1.3.9)
+
+After aligning the client to the reverse-engineered protocol — built-in appKey, 10 ms frames, `finish_audio` last-frame flag, full StartSession parameter set, dual WS/QUIC endpoints, `raw`/`speech_opus`:
+
+- `go test ./...` — all packages pass.
+- `tests/audio/zh_5s.wav` and `zh_1min.wav` transcribe correctly under: default (`speech_opus` + WS), `raw` PCM, QUIC endpoint, and an alternate device profile (Samsung S24 Ultra).
+
 ## Real Protocol Probe
 
 Probe command:

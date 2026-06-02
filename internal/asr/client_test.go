@@ -92,15 +92,18 @@ func TestClientStreamsMultipleFinalsInOneSession(t *testing.T) {
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
-		_, _, _ = conn.ReadMessage()
+		// 持续 drain 客户端音频/结束帧；结果推送与帧数解耦（贴近真实异步流式）。
+		go func() {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
 		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第一段", "is_interim": true, "index": 0}}})
-		_, _, _ = conn.ReadMessage()
 		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第一段。", "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
-		_, _, _ = conn.ReadMessage()
 		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第二段", "is_interim": true, "index": 1}}})
-		_, _, _ = conn.ReadMessage()
 		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第二段。", "is_interim": false, "is_vad_finished": true, "index": 1, "extra": map[string]any{"nonstream_result": true}}}})
-		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 	}))
 	defer srv.Close()
@@ -364,8 +367,8 @@ func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing
 	if src.i != 2 {
 		t.Fatalf("source consumed %d frames, want 2", src.i)
 	}
-	if taskRequests.Load() != 3 {
-		t.Fatalf("task requests = %d, want 3 including final silence frame", taskRequests.Load())
+	if taskRequests.Load() != 2 {
+		t.Fatalf("task requests = %d, want 2 (last frame carries finish_audio, no silence frame)", taskRequests.Load())
 	}
 }
 
@@ -453,14 +456,14 @@ func TestClientReissuesDeviceAfterRepeatedHandshakeFailure(t *testing.T) {
 	if src.i != 2 {
 		t.Fatalf("source consumed %d frames, want 2", src.i)
 	}
-	if taskRequests.Load() != 3 {
-		t.Fatalf("task requests = %d, want 3 including final silence frame", taskRequests.Load())
+	if taskRequests.Load() != 2 {
+		t.Fatalf("task requests = %d, want 2 (last frame carries finish_audio, no silence frame)", taskRequests.Load())
 	}
 	creds, err := LoadCredentials(credPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if creds.DeviceID != "new-device" || creds.Token != "new-token" {
+	if creds.DeviceID != "new-device" || creds.Token != BuiltinASRAppKey {
 		t.Fatalf("credentials not reissued: %+v", creds)
 	}
 }

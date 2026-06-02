@@ -29,6 +29,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	language := fs.String("language", "zh", "language hint")
 	fs.StringVar(language, "l", "zh", "language hint")
 	prompt := fs.String("prompt", "", "prompt/hotwords hint")
+	hotwords := fs.String("hotwords", "", "comma-separated hotwords to boost recognition")
 	noPunc := fs.Bool("no-punctuation", false, "disable punctuation")
 	disableThreePass := fs.Bool("disable-three-pass", false, "disable third pass")
 	outPath := fs.String("output", "", "write output to file")
@@ -36,7 +37,6 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	inputFormat := fs.String("input-format", "wav", "stdin format: pcm16|wav|raw; pcm16/raw + --stream is live")
 	sampleRate := fs.Int("sample-rate", audio.SampleRate, "raw PCM sample rate")
 	requestTimeout := fs.Duration("request-timeout", config.DefaultServerRequestTimeout, "request timeout")
-	realtime := fs.Bool("realtime", false, "pace file input at realtime speed")
 	noChunk := fs.Bool("no-chunk", false, "disable long-file chunking")
 	chunkDuration := fs.Duration("chunk-duration", transcriber.DefaultChunkDuration, "long-file chunk duration")
 	if err := fs.Parse(reorderTranscribeArgs(args)); err != nil {
@@ -82,6 +82,9 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	ctx := context.Background()
 	svc := transcription.FromAppConfig(cfg)
 	svc.Config.ChunkDuration = *chunkDuration
+	if *hotwords != "" {
+		svc.Config.Hotwords = config.SplitList(*hotwords)
+	}
 	traceWriter, err := openTraceWriter(g.traceASRPath)
 	if err != nil {
 		printErr("trace_error", err)
@@ -99,9 +102,10 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		DisablePunctuation: *noPunc,
 		DisableThreePass:   *disableThreePass,
 		RequestTimeout:     *requestTimeout,
-		Realtime:           *realtime && !liveInput,
 	})
 	opts.RequestTimeout = liveRequestTimeout(opts.RequestTimeout, liveInput, requestTimeoutSet)
+	waitHotwords := svc.ReportHotwordsAsync(ctx)
+	defer waitHotwords()
 	if *stream {
 		events, err := streamEvents(ctx, svc, fs.Arg(0), *inputFormat, *sampleRate, opts, !*noChunk, liveInput)
 		if err != nil {

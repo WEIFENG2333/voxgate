@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -17,10 +18,14 @@ type Config struct {
 	CredentialPath string `yaml:"credential_path"`
 	LogLevel       string `yaml:"log_level"`
 	ASR            struct {
-		EnablePunctuation bool   `yaml:"enable_punctuation"`
-		EnableThreePass   bool   `yaml:"enable_three_pass"`
-		EnableTwoPass     bool   `yaml:"enable_two_pass"`
-		UserAgent         string `yaml:"user_agent"`
+		EnablePunctuation bool     `yaml:"enable_punctuation"`
+		EnableThreePass   bool     `yaml:"enable_three_pass"`
+		EnableTwoPass     bool     `yaml:"enable_two_pass"`
+		UserAgent         string   `yaml:"user_agent"`
+		Endpoint          string   `yaml:"endpoint"`     // ws(默认) | quic
+		AudioFormat       string   `yaml:"audio_format"` // speech_opus(默认) | raw
+		Device            string   `yaml:"device"`       // xiaomi14(默认) | samsung | pixel
+		Hotwords          []string `yaml:"hotwords"`     // 个人热词，转录时异步上报以增强专有词识别
 	} `yaml:"asr"`
 	Server struct {
 		Host           string `yaml:"host"`
@@ -39,6 +44,9 @@ func Default() Config {
 	c.ASR.EnableThreePass = true
 	c.ASR.EnableTwoPass = true
 	c.ASR.UserAgent = asr.DefaultUserAgent
+	c.ASR.Endpoint = "ws"
+	c.ASR.AudioFormat = asr.AudioFormatSpeechOpus
+	c.ASR.Device = "xiaomi14"
 	c.Server.Host = "127.0.0.1"
 	c.Server.Port = 8080
 	c.Server.MaxConcurrency = 4
@@ -68,6 +76,18 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("VOXGATE_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
+	}
+	if v := os.Getenv("VOXGATE_ASR_ENDPOINT"); v != "" {
+		c.ASR.Endpoint = v
+	}
+	if v := os.Getenv("VOXGATE_ASR_AUDIO_FORMAT"); v != "" {
+		c.ASR.AudioFormat = v
+	}
+	if v := os.Getenv("VOXGATE_ASR_DEVICE"); v != "" {
+		c.ASR.Device = v
+	}
+	if v := os.Getenv("VOXGATE_ASR_HOTWORDS"); v != "" {
+		c.ASR.Hotwords = SplitList(v)
 	}
 	if v := os.Getenv("VOXGATE_SERVER_HOST"); v != "" {
 		c.Server.Host = v
@@ -100,4 +120,16 @@ func ServerRequestTimeout(c Config) time.Duration {
 
 func ExpandPath(path string) string {
 	return paths.Expand(path)
+}
+
+// SplitList 将逗号分隔的字符串切成去空、去首尾空白的列表。
+func SplitList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

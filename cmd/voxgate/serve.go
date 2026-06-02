@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/asr"
 	"github.com/WEIFENG2333/voxgate/internal/config"
 	"github.com/WEIFENG2333/voxgate/internal/server"
+	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
 func serve(args []string, cfg config.Config, g globalFlags) int {
@@ -55,6 +57,7 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 	if !g.quiet {
 		logStartup(g, srv.Addr())
 	}
+	transcription.FromAppConfig(cfg).ReportHotwordsAsync(context.Background())
 	if err := http.ListenAndServe(srv.Addr(), srv.Handler()); err != nil {
 		printErr("server_error", err)
 		return 1

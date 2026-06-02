@@ -24,6 +24,8 @@ type Config struct {
 	CredentialPath string
 	UserAgent      string
 	WebSocketURL   string
+	AudioFormat    string            // speech_opus | raw
+	Device         asr.DeviceProfile // 设备画像
 	ChunkDuration  time.Duration
 	ChunkThreshold time.Duration
 	TraceWriter    io.Writer
@@ -33,13 +35,20 @@ type Runner struct {
 	Config Config
 }
 
-func (r Runner) Transcribe(ctx context.Context, src *audio.Source, opts asr.Options, allowChunking bool) (asr.Result, error) {
-	client := asr.Client{Config: asr.ClientConfig{
+// clientConfig 由 Runner 配置组装 asr.ClientConfig（端点/格式/设备/凭证）。
+func (r Runner) clientConfig() asr.ClientConfig {
+	return asr.ClientConfig{
 		CredentialPath: r.Config.CredentialPath,
 		UserAgent:      r.Config.UserAgent,
 		WebSocketURL:   r.Config.WebSocketURL,
+		AudioFormat:    r.Config.AudioFormat,
+		Device:         r.Config.Device,
 		TraceWriter:    r.Config.TraceWriter,
-	}}
+	}
+}
+
+func (r Runner) Transcribe(ctx context.Context, src *audio.Source, opts asr.Options, allowChunking bool) (asr.Result, error) {
+	client := asr.Client{Config: r.clientConfig()}
 	if allowChunking && src.Duration() > r.threshold() {
 		return r.transcribeChunks(ctx, client, src.Chunks(r.chunkDuration()), opts)
 	}
@@ -55,12 +64,7 @@ func (r Runner) StreamFrames(ctx context.Context, src asr.PCMFrameSource, opts a
 	if err != nil {
 		return nil, err
 	}
-	client := asr.Client{Config: asr.ClientConfig{
-		CredentialPath: r.Config.CredentialPath,
-		UserAgent:      r.Config.UserAgent,
-		WebSocketURL:   r.Config.WebSocketURL,
-		TraceWriter:    r.Config.TraceWriter,
-	}}
+	client := asr.Client{Config: r.clientConfig()}
 	return client.Transcribe(ctx, src, enc, opts)
 }
 
@@ -68,12 +72,7 @@ func (r Runner) StreamWithChunking(ctx context.Context, src *audio.Source, opts 
 	if !allowChunking || src.Duration() <= r.threshold() {
 		return r.Stream(ctx, src, opts)
 	}
-	client := asr.Client{Config: asr.ClientConfig{
-		CredentialPath: r.Config.CredentialPath,
-		UserAgent:      r.Config.UserAgent,
-		WebSocketURL:   r.Config.WebSocketURL,
-		TraceWriter:    r.Config.TraceWriter,
-	}}
+	client := asr.Client{Config: r.clientConfig()}
 	out := make(chan asr.Event, 32)
 	go r.streamChunks(ctx, out, client, src.Chunks(r.streamChunkDuration()), opts)
 	return out, nil

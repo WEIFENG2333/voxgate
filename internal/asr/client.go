@@ -23,7 +23,9 @@ import (
 type ClientConfig struct {
 	CredentialPath string
 	UserAgent      string
-	WebSocketURL   string
+	WebSocketURL   string        // 留空用默认端点 WebSocketURL；可设 EndpointWS / EndpointQUIC
+	AudioFormat    string        // 留空=speech_opus(默认)；可设 AudioFormatRaw 直接发 PCM(免 opus)
+	Device         DeviceProfile // 设备画像，留空用 DefaultDevice
 	HTTP           *http.Client
 	Dialer         *websocket.Dialer
 	TraceWriter    io.Writer
@@ -128,8 +130,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		userAgent = DefaultUserAgent
 	}
 	header.Set("User-Agent", userAgent)
-	header.Set("proto-version", "v2")
-	header.Set("x-custom-keepalive", "true")
+	header.Set("proto-version", ProtoVersion)
 	dialer := c.Config.Dialer
 	if dialer == nil {
 		dialer = websocket.DefaultDialer
@@ -156,15 +157,20 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	if resp.MessageType == MessageTaskFailed {
 		return true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
-	sessionPayload, _ := json.Marshal(map[string]any{
-		"audio_info":              map[string]any{"channel": UpstreamChannels, "format": AudioFormatSpeechOpus, "sample_rate": UpstreamSampleRate},
-		"enable_punctuation":      opts.EnablePunctuation,
-		"enable_speech_rejection": false,
-		"extra": map[string]any{
-			"app_name": "com.android.chrome", "cell_compress_rate": 8, "did": creds.DeviceID,
-			"enable_asr_threepass": opts.EnableThreePass, "enable_asr_twopass": opts.EnableTwoPass, "input_mode": "tool",
-		},
-	})
+	device := c.Config.Device
+	if device.Model == "" {
+		device = DefaultDevice
+	}
+	sess := DefaultSessionConfig(creds.DeviceID, device)
+	sess.EnablePunctuation = opts.EnablePunctuation
+	sess.EnableASRThreePass = opts.EnableThreePass
+	sess.EnableASRTwoPass = opts.EnableTwoPass
+	sess.Context = opts.Prompt
+	if c.Config.AudioFormat != "" {
+		sess.AudioFormat = c.Config.AudioFormat
+	}
+	sess.ApplyDynamic(creds.Dynamic) // settings 下发的 asr_config 动态覆盖
+	sessionPayload, _ := json.Marshal(sess.ToPayload())
 	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartSession, Payload: string(sessionPayload), RequestID: requestID}); err != nil {
 		return true, stats.wrap("send StartSession", err)
 	}
@@ -198,7 +204,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		}
 	}
 	go func() {
-		sendErr <- c.sendAudio(ctx, conn, trace, stats, requestID, creds.Token, source, encoder, opts.Realtime)
+		sendErr <- c.sendAudio(ctx, conn, trace, stats, requestID, creds.Token, source, encoder)
 	}()
 	go func() {
 		recvErr <- c.recv(ctx, conn, trace, stats, requestID, source, events, done, finishedSending)
@@ -235,9 +241,38 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 }
 
-func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder, realtime bool) error {
-	timestamp := time.Now().UnixMilli()
+// sendAudio 流式发送音频帧：中间帧 payload 为空对象，末帧带 {"finish_audio":true}；
+// format=raw 直接发 PCM，否则 opus 编码。末帧标志靠一帧 lookahead 放到最后一帧。
+func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder) error {
+	raw := c.Config.AudioFormat == AudioFormatRaw
 	frameIndex := 0
+
+	sendFrame := func(pcm []byte, state asrproto.FrameState, finish bool) error {
+		audio := pcm
+		if !raw {
+			var err error
+			if audio, err = encoder.EncodePCMFrame(pcm); err != nil {
+				return err
+			}
+		}
+		flags := map[string]any{}
+		if finish {
+			flags["finish_audio"] = true // 末帧标志
+		}
+		payload, _ := json.Marshal(flags)
+		if err := sendPBTrace(conn, trace, asrproto.Request{
+			ServiceName: ServiceNameASR, MethodName: MethodTaskRequest,
+			Payload: string(payload), AudioData: audio, RequestID: requestID, FrameState: state,
+		}); err != nil {
+			return err
+		}
+		frameIndex++
+		stats.sentFrame(frameIndex, source.Duration())
+		return nil
+	}
+
+	var prev []byte
+	havePrev := false
 	for {
 		pcm, ok, err := source.NextFrame()
 		if err != nil {
@@ -246,43 +281,27 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 		if !ok {
 			break
 		}
-		opusFrame, err := encoder.EncodePCMFrame(pcm)
-		if err != nil {
-			return err
+		if havePrev { // prev 不是末帧，按 首/中 帧发送
+			state := asrproto.FrameStateMiddle
+			if frameIndex == 0 {
+				state = asrproto.FrameStateFirst
+			}
+			if err := sendFrame(prev, state, false); err != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 		}
-		state := asrproto.FrameStateMiddle
-		if frameIndex == 0 {
-			state = asrproto.FrameStateFirst
-		}
-		// Upstream timestamps are logical audio time, not wall-clock send time.
-		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: ServiceNameASR, MethodName: MethodTaskRequest, Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: state}); err != nil {
-			return err
-		}
-		frameIndex++
-		stats.sentFrame(frameIndex, source.Duration())
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		// File inputs can be sent as fast as possible; live/realtime inputs must
-		// preserve capture pace so the upstream VAD sees natural timing.
-		if realtime {
-			time.Sleep(time.Duration(UpstreamFrameDurationMS) * time.Millisecond)
-		}
+		prev = append([]byte(nil), pcm...) // 拷贝，NextFrame 可能复用底层缓冲
+		havePrev = true
 	}
-	if frameIndex > 0 {
-		silence := make([]byte, UpstreamBytesPerFrame)
-		opusFrame, err := encoder.EncodePCMFrame(silence)
-		if err != nil {
+	if havePrev { // 最后一帧：末帧标志 finish_audio
+		if err := sendFrame(prev, asrproto.FrameStateLast, true); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
-		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: ServiceNameASR, MethodName: MethodTaskRequest, Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
-			return err
-		}
-		stats.sentFrame(frameIndex+1, source.Duration())
 	}
 	return sendPBTrace(conn, trace, asrproto.Request{Token: token, ServiceName: ServiceNameASR, MethodName: MethodFinishSession, RequestID: requestID})
 }
@@ -348,10 +367,8 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 		}
 		lastText = parsed.Text
 		switch parsed.Kind {
-		case ParsedInterim:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, IsInterim: true, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
-		case ParsedDefinite:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+		case ParsedDelta:
+			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, IsInterim: parsed.IsInterim, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedFinal:
 			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: parsed.Text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			finalEmitted = true

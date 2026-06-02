@@ -25,7 +25,6 @@ func TestOptionsApplyRequestOverrides(t *testing.T) {
 		DisablePunctuation: true,
 		DisableThreePass:   true,
 		RequestTimeout:     30 * time.Second,
-		Realtime:           true,
 	})
 	if opts.Language != "en" || opts.Prompt != "names" {
 		t.Fatalf("bad language/prompt: %+v", opts)
@@ -33,7 +32,7 @@ func TestOptionsApplyRequestOverrides(t *testing.T) {
 	if opts.EnablePunctuation || opts.EnableThreePass || !opts.EnableTwoPass {
 		t.Fatalf("bad feature flags: %+v", opts)
 	}
-	if opts.RequestTimeout != 30*time.Second || !opts.Realtime {
+	if opts.RequestTimeout != 30*time.Second {
 		t.Fatalf("bad runtime options: %+v", opts)
 	}
 }

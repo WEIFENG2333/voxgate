@@ -3,3 +3,6 @@ dist/
 *.out.json
 *.probe.jsonl
 tests/audio/*.tmp.*
+
+docs/reverse-src/
+*.apk

@@ -92,12 +92,12 @@ func TestStreamChunksAggregatesFinalsAndSuppressesChunkDone(t *testing.T) {
 	client := &scriptedStreamClient{events: [][]asr.Event{
 		{
 			{Type: asr.EventTranscriptDelta, Text: "a"},
-			{Type: asr.EventTranscriptFinal, Text: "甲"},
+			{Type: asr.EventTranscriptCompleted, Text: "甲"},
 			{Type: asr.EventStreamDone},
 		},
 		{
-			{Type: asr.EventTranscriptFinal, Text: "乙"},
-			{Type: asr.EventTranscriptFinal, Text: "丙"},
+			{Type: asr.EventTranscriptCompleted, Text: "乙"},
+			{Type: asr.EventTranscriptCompleted, Text: "丙"},
 			{Type: asr.EventStreamDone},
 		},
 	}}
@@ -115,7 +115,7 @@ func TestStreamChunksAggregatesFinalsAndSuppressesChunkDone(t *testing.T) {
 	if got[0].Type != asr.EventTranscriptDelta || got[0].Text != "a" {
 		t.Fatalf("first event = %#v, want delta a", got[0])
 	}
-	if got[1].Type != asr.EventTranscriptFinal || got[1].Text != "甲乙丙" {
+	if got[1].Type != asr.EventTranscriptCompleted || got[1].Text != "甲乙丙" {
 		t.Fatalf("final event = %#v, want aggregated final", got[1])
 	}
 	if got[2].Type != asr.EventStreamDone {
@@ -133,7 +133,7 @@ func (f fakeStreamClient) Transcribe(_ context.Context, src asr.PCMFrameSource, 
 		close(events)
 		return events, nil
 	}
-	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "part", Duration: src.Duration().Seconds()}
+	events <- asr.Event{Type: asr.EventTranscriptCompleted, Text: "part", Duration: src.Duration().Seconds()}
 	close(events)
 	return events, nil
 }

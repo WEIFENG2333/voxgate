@@ -269,7 +269,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 				"delta":         ev.Text,
 			})
 		}
-		if ev.Type == asr.EventTranscriptFinal {
+		if ev.Type == asr.EventTranscriptCompleted {
 			s.log.Debug("realtime transcription completed", "item_id", itemID, "chars", len(ev.Text))
 			_ = writeRealtimeJSON(rw, map[string]any{
 				"type":          "conversation.item.input_audio_transcription.completed",

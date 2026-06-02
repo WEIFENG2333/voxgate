@@ -123,7 +123,7 @@ func TestClientStreamsMultipleFinalsInOneSession(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptFinal {
+		if ev.Type == EventTranscriptCompleted {
 			finals = append(finals, ev.Text)
 		}
 	}
@@ -181,7 +181,7 @@ func TestClientReportsFinalDurationAfterAudioIsSent(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptFinal {
+		if ev.Type == EventTranscriptCompleted {
 			doneDuration = ev.Duration
 		}
 	}
@@ -285,7 +285,7 @@ func TestClientFinishesEmptyResultAfterFinishSessionTimeout(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptFinal {
+		if ev.Type == EventTranscriptCompleted {
 			doneSeen = true
 			if ev.Text != "" {
 				t.Fatalf("done text = %q, want empty", ev.Text)
@@ -354,7 +354,7 @@ func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptFinal {
+		if ev.Type == EventTranscriptCompleted {
 			done = ev.Text
 		}
 	}
@@ -443,7 +443,7 @@ func TestClientReissuesDeviceAfterRepeatedHandshakeFailure(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptFinal {
+		if ev.Type == EventTranscriptCompleted {
 			done = ev.Text
 		}
 	}

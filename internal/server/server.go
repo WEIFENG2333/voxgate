@@ -233,11 +233,11 @@ func (s *Server) streamSSE(requestID string, w http.ResponseWriter, events <-cha
 		if ev.Type == asr.EventTranscriptDelta {
 			writeSSE(w, "transcript.text.delta", map[string]string{"type": "transcript.text.delta", "delta": ev.Text})
 		}
-		if ev.Type == asr.EventTranscriptFinal {
+		if ev.Type == asr.EventTranscriptCompleted {
 			writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": ev.Text})
 		}
 		if ev.Type == asr.EventStreamDone {
-			writeSSE(w, "stream.done", map[string]string{"type": "stream.done"})
+			writeSSE(w, "session.completed", map[string]string{"type": "session.completed"})
 		}
 		if ev.Type == asr.EventError && ev.Error != nil {
 			s.log.Error("transcription stream error", "request_id", requestID, "code", ev.Error.Code, "error", ev.Error.Message)

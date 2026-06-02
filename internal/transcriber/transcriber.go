@@ -55,10 +55,6 @@ func (r Runner) Transcribe(ctx context.Context, src *audio.Source, opts asr.Opti
 	return r.transcribeOne(ctx, client, src, opts)
 }
 
-func (r Runner) Stream(ctx context.Context, src *audio.Source, opts asr.Options) (<-chan asr.Event, error) {
-	return r.StreamFrames(ctx, src, opts)
-}
-
 func (r Runner) StreamFrames(ctx context.Context, src asr.PCMFrameSource, opts asr.Options) (<-chan asr.Event, error) {
 	enc, err := audio.NewOpusEncoder()
 	if err != nil {
@@ -70,7 +66,7 @@ func (r Runner) StreamFrames(ctx context.Context, src asr.PCMFrameSource, opts a
 
 func (r Runner) StreamWithChunking(ctx context.Context, src *audio.Source, opts asr.Options, allowChunking bool) (<-chan asr.Event, error) {
 	if !allowChunking || src.Duration() <= r.threshold() {
-		return r.Stream(ctx, src, opts)
+		return r.StreamFrames(ctx, src, opts)
 	}
 	client := asr.Client{Config: r.clientConfig()}
 	out := make(chan asr.Event, 32)
@@ -105,7 +101,7 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 				out <- ev
 				return
 			}
-			if ev.Type == asr.EventTranscriptFinal {
+			if ev.Type == asr.EventTranscriptCompleted {
 				chunkText.WriteString(ev.Text)
 				continue
 			}
@@ -117,7 +113,7 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 		b.WriteString(chunkText.String())
 		offset += chunk.Duration().Seconds()
 	}
-	out <- asr.Event{Type: asr.EventTranscriptFinal, Text: b.String(), Duration: offset}
+	out <- asr.Event{Type: asr.EventTranscriptCompleted, Text: b.String(), Duration: offset}
 	out <- asr.Event{Type: asr.EventStreamDone, Duration: offset}
 }
 
@@ -227,7 +223,7 @@ func collect(events <-chan asr.Event) (asr.Result, error) {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			return result, fmt.Errorf("%s", ev.Error.Message)
 		}
-		if ev.Type == asr.EventTranscriptFinal {
+		if ev.Type == asr.EventTranscriptCompleted {
 			text.WriteString(ev.Text)
 			result.Text = text.String()
 			result.Duration = ev.Duration

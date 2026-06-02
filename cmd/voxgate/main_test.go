@@ -142,7 +142,7 @@ func TestWriteTextStreamEventsPipeWritesFinalLinesOnly(t *testing.T) {
 	events := make(chan asr.Event, 3)
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你"}
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好"}
-	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "你好。"}
+	events <- asr.Event{Type: asr.EventTranscriptCompleted, Text: "你好。"}
 	close(events)
 
 	var buf bytes.Buffer
@@ -158,7 +158,7 @@ func TestWriteTextStreamEventsIgnoresShorterInterimText(t *testing.T) {
 	events := make(chan asr.Event, 3)
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好啊"}
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Text: "你好"}
-	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "你好。"}
+	events <- asr.Event{Type: asr.EventTranscriptCompleted, Text: "你好。"}
 	close(events)
 
 	var buf bytes.Buffer

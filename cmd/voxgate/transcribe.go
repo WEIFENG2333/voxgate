@@ -20,6 +20,8 @@ import (
 	"github.com/WEIFENG2333/voxgate/internal/transcription"
 )
 
+// transcribe 实现 `voxgate transcribe` 子命令：解析参数、装配转录服务，
+// 把音频（文件或 stdin 实时流）转成文本，按所选格式（含流式）输出。
 func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	fs := flag.NewFlagSet("transcribe", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -49,6 +51,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		printErr("invalid_args", fmt.Errorf("usage: voxgate transcribe <file|->"))
 		return 2
 	}
+	// 输出到终端（TTY 且非写文件）时启用交互显示：中间结果原地刷新预览。
 	stdoutTTY := term.IsTerminal(int(os.Stdout.Fd()))
 	display := textStreamDisplay{Interactive: stdoutTTY && *outPath == ""}
 	if display.Interactive {
@@ -104,6 +107,7 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		RequestTimeout:     *requestTimeout,
 	})
 	opts.RequestTimeout = liveRequestTimeout(opts.RequestTimeout, liveInput, requestTimeoutSet)
+	// 后台异步上报热词，函数退出前等它收尾，避免短命进程丢掉未完成的上报。
 	waitHotwords := svc.ReportHotwordsAsync(ctx)
 	defer waitHotwords()
 	if *stream {
@@ -147,6 +151,8 @@ func flagWasSet(fs *flag.FlagSet, name string) bool {
 	return seen
 }
 
+// liveRequestTimeout 对实时 stdin 流禁用请求超时（除非用户显式指定）：
+// 实时输入时长不定，固定超时会过早切断。
 func liveRequestTimeout(timeout time.Duration, liveInput, timeoutSet bool) time.Duration {
 	if liveInput && !timeoutSet {
 		return 0
@@ -216,6 +222,8 @@ type textStreamDisplay struct {
 	Width       int
 }
 
+// writeTextStreamEvents 在交互终端做原地刷新：中间结果（delta）用 \r\033[2K
+// 清行后重绘为预览，最终结果（final）清掉预览再换行落定；非交互时只输出 final。
 func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStreamDisplay) int {
 	lineOpen := false
 	for ev := range events {
@@ -239,7 +247,7 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 				return 1
 			}
 			lineOpen = true
-		case asr.EventTranscriptFinal:
+		case asr.EventTranscriptCompleted:
 			if display.Interactive && lineOpen {
 				if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
 					printErr("format_error", err)
@@ -262,6 +270,8 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 	return 0
 }
 
+// preview 把文本裁到终端宽度内，保留尾部（显示最新识别内容），超长则前缀省略号；
+// CJK 等宽字符按 2 列计宽。
 func (d textStreamDisplay) preview(text string) string {
 	width := d.Width
 	if width <= 0 {

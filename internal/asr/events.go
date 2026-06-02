@@ -5,13 +5,12 @@ import "time"
 type EventType string
 
 const (
-	EventTaskStarted     EventType = "task.started"
-	EventSessionStarted  EventType = "session.started"
-	EventVADStart        EventType = "vad.start"
-	EventTranscriptDelta EventType = "transcript.delta"
-	EventTranscriptFinal EventType = "transcript.final"
-	EventStreamDone      EventType = "stream.done"
-	EventError           EventType = "error"
+	EventStreamStarted       EventType = "stream.started"
+	EventVADStart            EventType = "vad.start"
+	EventTranscriptDelta     EventType = "transcript.delta"
+	EventTranscriptCompleted EventType = "transcript.completed"
+	EventStreamDone          EventType = "stream.done"
+	EventError               EventType = "error"
 )
 
 // Event is the internal streaming envelope used by the CLI, SSE endpoint, and

@@ -62,7 +62,7 @@ func (c Client) Transcribe(ctx context.Context, source PCMFrameSource, encoder P
 			defer cancel()
 		}
 		requestID := uuid.NewString()
-		events <- Event{Type: EventTaskStarted, RequestID: requestID}
+		events <- Event{Type: EventStreamStarted, RequestID: requestID}
 		if err := c.run(ctx, requestID, source, encoder, opts, events); err != nil {
 			events <- Event{Type: EventError, RequestID: requestID, Error: &ErrorPayload{Code: "asr_error", Message: err.Error()}}
 			return
@@ -182,7 +182,6 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	if resp.MessageType == MessageSessionFailed {
 		return true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
-	events <- Event{Type: EventSessionStarted, RequestID: requestID}
 
 	// Send and receive concurrently so partial transcripts are forwarded while
 	// audio is still being uploaded. This is the core streaming path.
@@ -326,7 +325,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 					return nil
 				}
 				if isTimeout(err) {
-					events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
+					events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 					return nil
 				}
 			default:
@@ -338,7 +337,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 				if lastText == "" {
 					return fmt.Errorf("websocket closed normally before any transcript result")
 				}
-				events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
+				events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 				return nil
 			}
 			return err
@@ -351,7 +350,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			if finalEmitted {
 				return nil
 			}
-			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
+			events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 			return nil
 		}
 		// Recognition payloads arrive as JSON nested inside the protobuf frame.
@@ -370,7 +369,7 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 		case ParsedDelta:
 			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, IsInterim: parsed.IsInterim, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 		case ParsedFinal:
-			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: parsed.Text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+			events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: parsed.Text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			finalEmitted = true
 			lastText = ""
 		}

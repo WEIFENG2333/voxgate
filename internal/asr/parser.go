@@ -80,20 +80,29 @@ func ParseResultJSON(s string) (ParsedResult, error) {
 	}
 	var raw map[string]any
 	_ = json.Unmarshal([]byte(s), &raw)
-	// 同一语音段（index）可能返回多遍识别结果（twopass/threepass）。
-	// 一次遍历完成去重（保留首次出现）、文本拼接与状态提取。
-	seen := make(map[int]bool, len(r.Results))
+	// 同一语音段（index）可能返回多遍结果：流式 pass、VAD 段最终、以及 finish 后的
+	// 非流式整句（nonstream_result，最高精度）。同一 index 优先保留非流式整句，
+	// 否则保留首次出现的（首个带标点，优于不带标点的副本）。
+	seen := make(map[int]int, len(r.Results))
 	kept := r.Results[:0]
+	for _, item := range r.Results {
+		if pos, ok := seen[item.Index]; ok {
+			if item.Extra.NonstreamResult && !kept[pos].Extra.NonstreamResult {
+				kept[pos] = item
+			}
+			continue
+		}
+		seen[item.Index] = len(kept)
+		kept = append(kept, item)
+	}
+	r.Results = kept
+
+	// 拼接文本并提取状态（基于去重后的结果）。
 	var text string
 	isInterim := true
 	vadFinished := false
 	nonstream := false
 	for _, item := range r.Results {
-		if seen[item.Index] {
-			continue
-		}
-		seen[item.Index] = true
-		kept = append(kept, item)
 		text += item.Text
 		if item.IsInterim != nil {
 			isInterim = *item.IsInterim
@@ -103,7 +112,6 @@ func ParseResultJSON(s string) (ParsedResult, error) {
 		vadFinished = item.IsVADFinished
 		nonstream = item.Extra.NonstreamResult
 	}
-	r.Results = kept
 	extra := parseExtra(r)
 	results := parseResults(r)
 	if r.Extra.VADStart {

@@ -34,6 +34,21 @@ func TestParseDefiniteDelta(t *testing.T) {
 	}
 }
 
+func TestParsePrefersNonstreamResult(t *testing.T) {
+	// 最终帧含 vad_finished 与 nonstream_result 两个元素（同 index、文字可能不同），
+	// 应取 nonstream_result（finish 后整句重识别，最准）。
+	got, err := ParseResultJSON(`{"results":[
+		{"text":"识别错的","is_interim":false,"is_vad_finished":true,"index":0},
+		{"text":"识别对的","is_interim":false,"index":0,"extra":{"nonstream_result":true}}
+	]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != ParsedFinal || got.Text != "识别对的" {
+		t.Fatalf("expected nonstream result, got kind=%v text=%q", got.Kind, got.Text)
+	}
+}
+
 func TestParseDeduplicatesMultiPassByIndex(t *testing.T) {
 	// 同一语音段（index 相同）返回 twopass/threepass 两遍结果，应去重而非拼接
 	got, err := ParseResultJSON(`{"results":[

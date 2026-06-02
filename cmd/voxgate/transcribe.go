@@ -250,46 +250,24 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 			return 1
 		}
 		switch ev.Type {
-		case asr.EventTranscriptUpdate:
+		case asr.EventTranscriptUpdate, asr.EventTranscriptDelta:
 			if !display.Interactive {
 				continue
 			}
-			preview := ev.Text
-			if ev.Snapshot != "" {
-				preview = display.pendingText(committedRunes, ev.Snapshot)
-				currentSnapshotRunes = runeLen(ev.Snapshot)
-			} else {
-				currentSnapshotRunes = committedRunes + runeLen(preview)
-			}
-			if _, err := fmt.Fprintf(w, "\r\033[2K%s", display.preview(preview)); err != nil {
+			preview, snapshotRunes := display.eventPreview(committedRunes, ev)
+			if err := display.writePreview(w, preview); err != nil {
 				printErr("format_error", err)
 				return 1
 			}
 			currentLine = preview
-			lineOpen = true
-		case asr.EventTranscriptDelta:
-			if !display.Interactive {
-				continue
-			}
-			preview := ev.Text
-			if ev.Snapshot != "" {
-				preview = display.pendingText(committedRunes, ev.Snapshot)
-				currentSnapshotRunes = runeLen(ev.Snapshot)
-			} else {
-				currentSnapshotRunes = committedRunes + runeLen(preview)
-			}
-			if _, err := fmt.Fprintf(w, "\r\033[2K%s", display.preview(preview)); err != nil {
-				printErr("format_error", err)
-				return 1
-			}
-			currentLine = preview
+			currentSnapshotRunes = snapshotRunes
 			lineOpen = true
 		case asr.EventSegmentStable:
 			if !display.Interactive {
 				continue
 			}
 			if lineOpen {
-				if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
+				if err := clearLine(w); err != nil {
 					printErr("format_error", err)
 					return 1
 				}
@@ -309,7 +287,7 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 		case asr.EventTranscriptDone:
 			if display.Interactive {
 				if lineOpen {
-					if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
+					if err := clearLine(w); err != nil {
 						printErr("format_error", err)
 						return 1
 					}
@@ -344,12 +322,32 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 		}
 	}
 	if display.Interactive && lineOpen {
-		if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
+		if err := clearLine(w); err != nil {
 			printErr("format_error", err)
 			return 1
 		}
 	}
 	return 0
+}
+
+func (d textStreamDisplay) eventPreview(committedRunes int, ev asr.Event) (string, int) {
+	if ev.Snapshot == "" {
+		return ev.Text, committedRunes + runeLen(ev.Text)
+	}
+	return d.pendingText(committedRunes, ev.Snapshot), runeLen(ev.Snapshot)
+}
+
+func (d textStreamDisplay) writePreview(w io.Writer, text string) error {
+	if err := clearLine(w); err != nil {
+		return err
+	}
+	_, err := fmt.Fprint(w, d.preview(text))
+	return err
+}
+
+func clearLine(w io.Writer) error {
+	_, err := fmt.Fprint(w, "\r\033[2K")
+	return err
 }
 
 func (d textStreamDisplay) pendingText(committedRunes int, snapshot string) string {

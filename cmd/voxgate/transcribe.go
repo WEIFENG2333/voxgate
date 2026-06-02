@@ -307,25 +307,40 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 			currentLine = ""
 			currentSnapshotRunes = committedRunes
 		case asr.EventTranscriptDone:
-			if display.Interactive && lineOpen {
-				if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
+			if display.Interactive {
+				if lineOpen {
+					if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
+						printErr("format_error", err)
+						return 1
+					}
+					lineOpen = false
+				}
+				if ev.Text == "" {
+					continue
+				}
+				if committedRunes > 0 || currentLine != "" {
+					if _, err := fmt.Fprintln(w); err != nil {
+						printErr("format_error", err)
+						return 1
+					}
+				}
+				if _, err := fmt.Fprintf(w, "Final:\n%s\n", ev.Text); err != nil {
 					printErr("format_error", err)
 					return 1
 				}
-				lineOpen = false
 				currentLine = ""
-			}
-			doneText := ev.Text
-			if display.Interactive {
-				doneText = display.pendingText(committedRunes, ev.Text)
-			}
-			if doneText == "" {
+				currentSnapshotRunes = committedRunes
 				continue
 			}
-			if _, err := fmt.Fprintln(w, doneText); err != nil {
+			if ev.Text == "" {
+				continue
+			}
+			if _, err := fmt.Fprintln(w, ev.Text); err != nil {
 				printErr("format_error", err)
 				return 1
 			}
+			currentLine = ""
+			currentSnapshotRunes = committedRunes
 		}
 	}
 	if display.Interactive && lineOpen {

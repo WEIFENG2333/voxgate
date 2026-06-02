@@ -166,7 +166,7 @@ func TestWriteTextStreamEventsIgnoresShorterInterimText(t *testing.T) {
 	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
 		t.Fatalf("exit = %d, want 0", got)
 	}
-	if got, want := buf.String(), "\r\033[2K你好啊\r\033[2K你好\r\033[2K你好。\n"; got != want {
+	if got, want := buf.String(), "\r\033[2K你好啊\r\033[2K你好\r\033[2K\nFinal:\n你好。\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
@@ -188,7 +188,7 @@ func TestWriteTextStreamEventsStartsNewLineAfterStableSegment(t *testing.T) {
 	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
 		t.Fatalf("exit = %d, want 0", got)
 	}
-	want := "\r\033[2K你好\r\033[2K你好。\r\033[2K你好。\n\r\033[2K我\r\033[2K我最近\r\033[2K我最近。\r\033[2K我最近。\n"
+	want := "\r\033[2K你好\r\033[2K你好。\r\033[2K你好。\n\r\033[2K我\r\033[2K我最近\r\033[2K我最近。\r\033[2K我最近。\n\nFinal:\n你好。我最近。\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
@@ -210,7 +210,28 @@ func TestWriteTextStreamEventsDoesNotReplayStablePrefixRevisions(t *testing.T) {
 	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
 		t.Fatalf("exit = %d, want 0", got)
 	}
-	want := "\r\033[2K我看看现在的效果怎么样\r\033[2K我看看现在的效果怎么样？\r\033[2K我看看现在的效果怎么样？\n\r\033[2K确实\r\033[2K确实，现在不错。\r\033[2K确实，现在不错。\n"
+	want := "\r\033[2K我看看现在的效果怎么样\r\033[2K我看看现在的效果怎么样？\r\033[2K我看看现在的效果怎么样？\n\r\033[2K确实\r\033[2K确实，现在不错。\r\033[2K确实，现在不错。\n\nFinal:\n我看看现在的效果怎么样。确实，现在不错。\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestWriteTextStreamEventsPrintsFinalTextAsSeparateBlockAfterStableSegment(t *testing.T) {
+	events := make(chan asr.Event, 6)
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "我看看现在的效果怎么样"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "我看看现在的效果怎么样？"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "ignored stable text", Snapshot: "ignored stable snapshot"}
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "我看看现在的效果怎么样？确实"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "我看看现在的效果怎么样？确实不错"}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "我看看现在的效果怎么样。确实不错。这个最终全文不能被重放。"}
+	close(events)
+
+	var buf bytes.Buffer
+	display := textStreamDisplay{Interactive: true, Width: 160}
+	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	want := "\r\033[2K我看看现在的效果怎么样\r\033[2K我看看现在的效果怎么样？\r\033[2K我看看现在的效果怎么样？\n\r\033[2K确实\r\033[2K确实不错\r\033[2K\nFinal:\n我看看现在的效果怎么样。确实不错。这个最终全文不能被重放。\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}

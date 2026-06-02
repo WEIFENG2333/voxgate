@@ -330,28 +330,25 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 		}
 		resp, err := readPBTrace(conn, trace)
 		if err != nil {
-			select {
-			case <-finishedSending:
-				if finalEmitted {
-					return nil
-				}
-				// send 已完成后读到任何错误（超时、连接被关、异常断开）都意味着会话结束：
-				// 已收到结果则用之，超时无结果则发空结果收尾。
-				if lastText != "" || isTimeout(err) {
-					events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
-					return nil
-				}
-			default:
+			if finalEmitted {
+				return nil
 			}
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				if finalEmitted {
-					return nil
-				}
-				if lastText == "" {
-					return fmt.Errorf("websocket closed normally before any transcript result")
-				}
+			// 已收到过结果时，读失败（连接关闭/异常断开/超时）即合成最终事件，不丢结果。
+			if lastText != "" {
 				events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
 				return nil
+			}
+			// 无结果时：send 已完成后的超时视为正常空结果收尾。
+			if isTimeout(err) {
+				select {
+				case <-finishedSending:
+					events <- Event{Type: EventTranscriptCompleted, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
+					return nil
+				default:
+				}
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				return fmt.Errorf("websocket closed normally before any transcript result")
 			}
 			return err
 		}

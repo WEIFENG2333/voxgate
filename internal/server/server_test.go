@@ -174,24 +174,19 @@ func TestRealtimeTranscriptionStreamsBeforeCommit(t *testing.T) {
 	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-			t.Fatal(err)
-		}
-		err := conn.ReadJSON(&msg)
-		if err != nil {
-			var netErr interface{ Timeout() bool }
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			t.Fatal(err)
+	// 单次总 deadline + 连续读，不在超时后重试读：gorilla websocket 读超时会让连接失效，
+	// 再次读会 panic（repeated read on failed connection）。
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if err := conn.ReadJSON(&msg); err != nil {
+			t.Fatalf("did not receive transcription delta before commit: %v", err)
 		}
 		if msg["type"] == "conversation.item.input_audio_transcription.delta" {
 			return
 		}
 	}
-	t.Fatal("did not receive transcription delta before commit")
 }
 
 func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {

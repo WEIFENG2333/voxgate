@@ -61,16 +61,17 @@ func (c Client) Transcribe(ctx context.Context, source PCMFrameSource, encoder P
 		}
 		requestID := uuid.NewString()
 		events <- Event{Type: EventTaskStarted, RequestID: requestID}
-		if err := c.run(ctx, requestID, source, encoder, opts, events); err != nil {
+		text, err := c.run(ctx, requestID, source, encoder, opts, events)
+		if err != nil {
 			events <- Event{Type: EventError, RequestID: requestID, Error: &ErrorPayload{Code: "asr_error", Message: err.Error()}}
 			return
 		}
-		events <- Event{Type: EventStreamDone, RequestID: requestID, Duration: source.Duration().Seconds()}
+		events <- Event{Type: EventTranscriptDone, RequestID: requestID, Text: text, Duration: source.Duration().Seconds()}
 	}()
 	return events, nil
 }
 
-func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) error {
+func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) (string, error) {
 	userAgent := c.Config.UserAgent
 	if userAgent == "" {
 		userAgent = DefaultUserAgent
@@ -78,37 +79,37 @@ func (c Client) run(ctx context.Context, requestID string, source PCMFrameSource
 	manager := CredentialManager{Path: c.Config.CredentialPath, UserAgent: userAgent, HTTP: c.Config.HTTP}
 	creds, err := manager.Ensure(ctx, false)
 	if err != nil {
-		return err
+		return "", err
 	}
-	retryable, err := c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+	text, retryable, err := c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
 	if err == nil {
-		return nil
+		return text, nil
 	}
 	if !retryable {
-		return err
+		return "", err
 	}
 	// Handshake failures are usually credential-related: try a token refresh
 	// first, then fall back to a fresh device identity if the service still
 	// rejects the session.
 	creds, refreshErr := manager.Ensure(ctx, true)
 	if refreshErr == nil {
-		retryable, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+		text, retryable, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
 		if err == nil {
-			return nil
+			return text, nil
 		}
 		if !retryable {
-			return err
+			return "", err
 		}
 	}
 	creds, reissueErr := manager.Reissue(ctx)
 	if reissueErr != nil {
-		return err
+		return "", err
 	}
-	_, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
-	return err
+	text, _, err = c.runWithCreds(ctx, creds, requestID, source, encoder, opts, events)
+	return text, err
 }
 
-func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) (bool, error) {
+func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID string, source PCMFrameSource, encoder PCMFrameEncoder, opts Options, events chan<- Event) (string, bool, error) {
 	stats := newSessionStats(requestID, opts.RequestTimeout)
 	wsURL := c.Config.WebSocketURL
 	if wsURL == "" {
@@ -116,7 +117,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 	u, err := url.Parse(wsURL)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	q := u.Query()
 	q.Set("aid", strconv.Itoa(AID))
@@ -139,22 +140,22 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	// task, then StartSession declares audio format and recognition options.
 	conn, _, err := dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
-		return true, stats.wrap("dial upstream websocket", err)
+		return "", true, stats.wrap("dial upstream websocket", err)
 	}
 	defer conn.Close()
 	trace := newFrameTrace(c.Config.TraceWriter)
 	send := func(req asrproto.Request) error { return sendPBTrace(conn, trace, req) }
 	read := func() (asrproto.Response, error) { return readPBTrace(conn, trace) }
 	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartTask, RequestID: requestID}); err != nil {
-		return true, stats.wrap("send StartTask", err)
+		return "", true, stats.wrap("send StartTask", err)
 	}
 	resp, err := read()
 	if err != nil {
-		return true, stats.wrap("read StartTask response", err)
+		return "", true, stats.wrap("read StartTask response", err)
 	}
 	stats.received(resp, source.Duration())
 	if resp.MessageType == MessageTaskFailed {
-		return true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
+		return "", true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	sessionPayload, _ := json.Marshal(map[string]any{
 		"audio_info":              map[string]any{"channel": UpstreamChannels, "format": AudioFormatSpeechOpus, "sample_rate": UpstreamSampleRate},
@@ -166,22 +167,22 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		},
 	})
 	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartSession, Payload: string(sessionPayload), RequestID: requestID}); err != nil {
-		return true, stats.wrap("send StartSession", err)
+		return "", true, stats.wrap("send StartSession", err)
 	}
 	resp, err = read()
 	if err != nil {
-		return true, stats.wrap("read StartSession response", err)
+		return "", true, stats.wrap("read StartSession response", err)
 	}
 	stats.received(resp, source.Duration())
 	if resp.MessageType == MessageSessionFailed {
-		return true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
+		return "", true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	events <- Event{Type: EventSessionStarted, RequestID: requestID}
 
 	// Send and receive concurrently so partial transcripts are forwarded while
 	// audio is still being uploaded. This is the core streaming path.
 	sendErr := make(chan error, 1)
-	recvErr := make(chan error, 1)
+	recvDone := make(chan recvResult, 1)
 	done := make(chan struct{})
 	finishedSending := make(chan struct{})
 	var closeDone sync.Once
@@ -193,7 +194,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 	waitRecv := func() {
 		select {
-		case <-recvErr:
+		case <-recvDone:
 		case <-time.After(time.Second):
 		}
 	}
@@ -201,38 +202,44 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		sendErr <- c.sendAudio(ctx, conn, trace, stats, requestID, creds.Token, source, encoder, opts.Realtime)
 	}()
 	go func() {
-		recvErr <- c.recv(ctx, conn, trace, stats, requestID, source, events, done, finishedSending)
+		text, err := c.recv(ctx, conn, trace, stats, requestID, source, events, done, finishedSending)
+		recvDone <- recvResult{text: text, err: err}
 	}()
 	select {
 	case err := <-sendErr:
 		if err != nil {
 			stopRecv()
 			waitRecv()
-			return false, stats.wrap("send audio", err)
+			return "", false, stats.wrap("send audio", err)
 		}
 		close(finishedSending)
-		// After FinishSession the backend may close without an explicit final
-		// message. Bound the wait and let recv synthesize transcript.final.
+		// After FinishSession, bound the wait for the backend's final result or
+		// session terminal response.
 		_ = conn.SetReadDeadline(time.Now().Add(finishSessionWaitTimeout))
 		select {
-		case err := <-recvErr:
-			return false, stats.wrap("receive final response", err)
+		case recv := <-recvDone:
+			return recv.text, false, stats.wrap("receive final response", recv.err)
 		case <-ctx.Done():
 			stopRecv()
 			waitRecv()
-			return false, stats.wrap("wait for final response", ctx.Err())
+			return "", false, stats.wrap("wait for final response", ctx.Err())
 		}
-	case err := <-recvErr:
-		if err != nil {
-			return false, stats.wrap("receive upstream response", err)
+	case recv := <-recvDone:
+		if recv.err != nil {
+			return "", false, stats.wrap("receive upstream response", recv.err)
 		}
 		stopRecv()
-		return false, nil
+		return recv.text, false, nil
 	case <-ctx.Done():
 		stopRecv()
 		waitRecv()
-		return false, stats.wrap("transcription session", ctx.Err())
+		return "", false, stats.wrap("transcription session", ctx.Err())
 	}
+}
+
+type recvResult struct {
+	text string
+	err  error
 }
 
 func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID, token string, source PCMFrameSource, encoder PCMFrameEncoder, realtime bool) error {
@@ -287,53 +294,43 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 	return sendPBTrace(conn, trace, asrproto.Request{Token: token, ServiceName: ServiceNameASR, MethodName: MethodFinishSession, RequestID: requestID})
 }
 
-func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) error {
-	lastText := ""
-	finalEmitted := false
+func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrace, stats *sessionStats, requestID string, source PCMFrameSource, events chan<- Event, done <-chan struct{}, finishedSending <-chan struct{}) (string, error) {
+	state := newTranscriptState(requestID)
 	start := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		case <-done:
-			return nil
+			return state.text(), nil
 		default:
 		}
 		resp, err := readPBTrace(conn, trace)
 		if err != nil {
 			select {
 			case <-finishedSending:
-				if finalEmitted {
-					return nil
-				}
 				if isTimeout(err) {
-					events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
-					return nil
+					if state.hasTranscript() {
+						return state.text(), nil
+					}
+					return "", err
 				}
 			default:
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				if finalEmitted {
-					return nil
+				if !state.hasTranscript() {
+					return "", fmt.Errorf("websocket closed normally before any transcript result")
 				}
-				if lastText == "" {
-					return fmt.Errorf("websocket closed normally before any transcript result")
-				}
-				events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
-				return nil
+				return state.text(), nil
 			}
-			return err
+			return "", err
 		}
 		stats.received(resp, source.Duration())
 		switch resp.MessageType {
 		case MessageTaskFailed, MessageSessionFailed:
-			return fmt.Errorf("%s (code=%d): %s", resp.MessageType, resp.StatusCode, resp.StatusMessage)
+			return "", fmt.Errorf("%s (code=%d): %s", resp.MessageType, resp.StatusCode, resp.StatusMessage)
 		case MessageSessionFinished:
-			if finalEmitted {
-				return nil
-			}
-			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: lastText, Duration: source.Duration().Seconds()}
-			return nil
+			return state.text(), nil
 		}
 		// Recognition payloads arrive as JSON nested inside the protobuf frame.
 		// Parser classification keeps the transport code independent from the
@@ -343,21 +340,143 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			continue
 		}
 		if parsed.Kind == ParsedVADStart {
+			state.startUtterance()
 			events <- Event{Type: EventVADStart, RequestID: requestID, TimestampMS: int64(time.Since(start) / time.Millisecond), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			continue
 		}
-		lastText = parsed.Text
 		switch parsed.Kind {
 		case ParsedInterim:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, IsInterim: true, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
+			state.emitPartial(events, parsed)
 		case ParsedDefinite:
-			events <- Event{Type: EventTranscriptDelta, RequestID: requestID, Text: parsed.Text, Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
-		case ParsedFinal:
-			events <- Event{Type: EventTranscriptFinal, RequestID: requestID, Text: parsed.Text, Duration: source.Duration().Seconds(), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
-			finalEmitted = true
-			lastText = ""
+			state.emitPartial(events, parsed)
+		case ParsedStable:
+			state.emitStable(events, parsed, source.Duration().Seconds())
 		}
 	}
+}
+
+type transcriptState struct {
+	requestID       string
+	stableSeq       int
+	revision        int
+	displaySnapshot string
+	lastStableText  string
+}
+
+func newTranscriptState(requestID string) *transcriptState {
+	return &transcriptState{requestID: requestID}
+}
+
+func (s *transcriptState) hasTranscript() bool {
+	return s.displaySnapshot != "" || s.lastStableText != ""
+}
+
+func (s *transcriptState) text() string {
+	if s.displaySnapshot != "" {
+		return s.displaySnapshot
+	}
+	return s.lastStableText
+}
+
+func (s *transcriptState) startUtterance() {
+	// VAD is useful as a marker, but upstream may keep revising the same
+	// composing transcript across multiple VAD slices.
+}
+
+func (s *transcriptState) emitPartial(events chan<- Event, parsed ParsedResult) {
+	s.emitDisplay(events, parsed, 0)
+}
+
+func (s *transcriptState) emitStable(events chan<- Event, parsed ParsedResult, duration float64) {
+	s.emitDisplay(events, parsed, 0)
+	stableSnapshot := displayText(parsed)
+	if stableSnapshot == "" || stableSnapshot == s.lastStableText {
+		return
+	}
+	s.lastStableText = stableSnapshot
+	events <- s.stableEvent(parsed, stableSnapshot, duration)
+}
+
+func (s *transcriptState) emitDisplay(events chan<- Event, parsed ParsedResult, duration float64) {
+	snapshot := displayText(parsed)
+	if snapshot == "" || snapshot == s.displaySnapshot {
+		return
+	}
+	s.revision++
+	delta, appendOnly := textDelta(s.displaySnapshot, snapshot)
+	s.displaySnapshot = snapshot
+	if appendOnly {
+		events <- s.event(EventTranscriptDelta, parsed, delta, snapshot, duration)
+		return
+	}
+	events <- s.event(EventTranscriptUpdate, parsed, snapshot, snapshot, duration)
+}
+
+func displayText(parsed ParsedResult) string {
+	if parsed.Snapshot != "" {
+		return parsed.Snapshot
+	}
+	return parsed.Text
+}
+
+func (s *transcriptState) event(kind EventType, parsed ParsedResult, text, snapshot string, duration float64) Event {
+	ev := Event{
+		Type:         kind,
+		RequestID:    s.requestID,
+		Text:         text,
+		Snapshot:     snapshot,
+		Revision:     s.revision,
+		IsInterim:    kind != EventTranscriptDone && parsed.Kind != ParsedStable,
+		Start:        parsed.Start,
+		End:          parsed.End,
+		AudioStartMS: secondsToMillis(parsed.Start),
+		AudioEndMS:   secondsToMillis(parsed.End),
+		Duration:     duration,
+		Results:      parsed.Results,
+		Extra:        &parsed.Extra,
+		Raw:          parsed.Raw,
+	}
+	if kind == EventTranscriptDelta {
+		ev.Delta = text
+	}
+	return ev
+}
+
+func (s *transcriptState) stableEvent(parsed ParsedResult, snapshot string, duration float64) Event {
+	s.stableSeq++
+	return Event{
+		Type:         EventSegmentStable,
+		RequestID:    s.requestID,
+		Text:         snapshot,
+		Snapshot:     snapshot,
+		UtteranceID:  fmt.Sprintf("seg_%06d", s.stableSeq-1),
+		Revision:     s.revision,
+		Start:        parsed.Start,
+		End:          parsed.End,
+		AudioStartMS: secondsToMillis(parsed.Start),
+		AudioEndMS:   secondsToMillis(parsed.End),
+		Duration:     duration,
+		Results:      parsed.Results,
+		Extra:        &parsed.Extra,
+		Raw:          parsed.Raw,
+	}
+}
+
+func textDelta(previous, next string) (string, bool) {
+	if previous == "" {
+		return next, true
+	}
+	if strings.HasPrefix(next, previous) {
+		return strings.TrimPrefix(next, previous), true
+	}
+	return "", false
+}
+
+func secondsToMillis(seconds float64) int64 {
+	if seconds <= 0 {
+		return 0
+	}
+	return int64(seconds * 1000)
 }
 
 type sessionStats struct {

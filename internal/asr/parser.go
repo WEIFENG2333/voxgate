@@ -13,50 +13,57 @@ const (
 	ParsedVADStart
 	ParsedInterim
 	ParsedDefinite
-	ParsedFinal
+	ParsedStable
 )
 
 // ParsedResult is the normalized form of an upstream ResultJSON message.
 type ParsedResult struct {
-	Kind        ParsedKind
-	Text        string
-	Packet      int
-	Raw         map[string]any
-	VADFinished bool
-	Results     []ASRResult
-	Extra       ASRExtra
+	Kind            ParsedKind
+	Text            string
+	Snapshot        string
+	Packet          int
+	Raw             map[string]any
+	VADFinished     bool
+	NonstreamResult bool
+	Start           float64
+	End             float64
+	Index           int
+	Results         []ASRResult
+	Extra           ASRExtra
+}
+
+type resultItem struct {
+	Text         string  `json:"text"`
+	StartTime    float64 `json:"start_time"`
+	EndTime      float64 `json:"end_time"`
+	Confidence   float64 `json:"confidence"`
+	Alternatives []struct {
+		Text      string  `json:"text"`
+		StartTime float64 `json:"start_time"`
+		EndTime   float64 `json:"end_time"`
+		Words     []struct {
+			Word      string  `json:"word"`
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		} `json:"words"`
+		SemanticRelatedToPrev *bool `json:"semantic_related_to_prev"`
+		OIDecodingInfo        *struct {
+			FormerWordNum int      `json:"oi_former_word_num"`
+			LatterWordNum int      `json:"oi_latter_word_num"`
+			Words         []string `json:"oi_words"`
+		} `json:"oi_decoding_info"`
+	} `json:"alternatives"`
+	IsInterim     *bool `json:"is_interim"`
+	IsVADFinished bool  `json:"is_vad_finished"`
+	Index         int   `json:"index"`
+	Extra         struct {
+		NonstreamResult bool `json:"nonstream_result"`
+	} `json:"extra"`
 }
 
 type resultJSON struct {
-	Results []struct {
-		Text         string  `json:"text"`
-		StartTime    float64 `json:"start_time"`
-		EndTime      float64 `json:"end_time"`
-		Confidence   float64 `json:"confidence"`
-		Alternatives []struct {
-			Text      string  `json:"text"`
-			StartTime float64 `json:"start_time"`
-			EndTime   float64 `json:"end_time"`
-			Words     []struct {
-				Word      string  `json:"word"`
-				StartTime float64 `json:"start_time"`
-				EndTime   float64 `json:"end_time"`
-			} `json:"words"`
-			SemanticRelatedToPrev *bool `json:"semantic_related_to_prev"`
-			OIDecodingInfo        *struct {
-				FormerWordNum int      `json:"oi_former_word_num"`
-				LatterWordNum int      `json:"oi_latter_word_num"`
-				Words         []string `json:"oi_words"`
-			} `json:"oi_decoding_info"`
-		} `json:"alternatives"`
-		IsInterim     *bool `json:"is_interim"`
-		IsVADFinished bool  `json:"is_vad_finished"`
-		Index         int   `json:"index"`
-		Extra         struct {
-			NonstreamResult bool `json:"nonstream_result"`
-		} `json:"extra"`
-	} `json:"results"`
-	Extra struct {
+	Results []resultItem `json:"results"`
+	Extra   struct {
 		AudioDuration           *int           `json:"audio_duration"`
 		ModelAvgRTF             *float64       `json:"model_avg_rtf"`
 		ModelSendFirstResponse  *int           `json:"model_send_first_response"`
@@ -69,7 +76,7 @@ type resultJSON struct {
 }
 
 // ParseResultJSON decodes the upstream ResultJSON payload and classifies it as
-// VAD, interim, definite, final, or no-op.
+// VAD, interim, definite, stable, or no-op.
 func ParseResultJSON(s string) (ParsedResult, error) {
 	if strings.TrimSpace(s) == "" {
 		return ParsedResult{Kind: ParsedNoop}, nil
@@ -88,30 +95,82 @@ func ParseResultJSON(s string) (ParsedResult, error) {
 	if r.Results == nil {
 		return ParsedResult{Kind: ParsedNoop, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
 	}
-	var text string
-	isInterim := true
-	vadFinished := false
-	nonstream := false
-	for _, item := range r.Results {
-		text += item.Text
-		if item.IsInterim != nil {
-			isInterim = *item.IsInterim
-		} else {
-			isInterim = true
-		}
-		vadFinished = item.IsVADFinished
-		nonstream = item.Extra.NonstreamResult
+	current, ok := selectCurrentResult(r.Results)
+	if !ok {
+		return ParsedResult{Kind: ParsedNoop, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
 	}
+	display := selectDisplayText(r.Results, current.Text)
+	text := current.Text
+	isInterim := true
+	if current.IsInterim != nil {
+		isInterim = *current.IsInterim
+	}
+	vadFinished := current.IsVADFinished
+	nonstream := current.Extra.NonstreamResult
 	if text == "" {
 		return ParsedResult{Kind: ParsedNoop, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
 	}
+	parsed := ParsedResult{
+		Text:            text,
+		Snapshot:        display,
+		VADFinished:     vadFinished,
+		NonstreamResult: nonstream,
+		Start:           current.StartTime,
+		End:             current.EndTime,
+		Index:           current.Index,
+		Packet:          r.Extra.PacketNumber,
+		Raw:             raw,
+		Results:         results,
+		Extra:           extra,
+	}
 	if nonstream || (!isInterim && vadFinished) {
-		return ParsedResult{Kind: ParsedFinal, Text: text, VADFinished: vadFinished, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
+		parsed.Kind = ParsedStable
+		return parsed, nil
 	}
 	if !isInterim {
-		return ParsedResult{Kind: ParsedDefinite, Text: text, VADFinished: vadFinished, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
+		parsed.Kind = ParsedDefinite
+		return parsed, nil
 	}
-	return ParsedResult{Kind: ParsedInterim, Text: text, Packet: r.Extra.PacketNumber, Raw: raw, Results: results, Extra: extra}, nil
+	parsed.Kind = ParsedInterim
+	return parsed, nil
+}
+
+func selectCurrentResult(results []resultItem) (resultItem, bool) {
+	selected := -1
+	for i, item := range results {
+		if item.Text == "" {
+			continue
+		}
+		if selected == -1 || resultRankLess(results[selected], item) {
+			selected = i
+		}
+	}
+	if selected == -1 {
+		return resultItem{}, false
+	}
+	return results[selected], true
+}
+
+func selectDisplayText(results []resultItem, fallback string) string {
+	for _, item := range results {
+		if item.Text != "" {
+			return item.Text
+		}
+	}
+	return fallback
+}
+
+func resultRankLess(a, b resultItem) bool {
+	if b.StartTime != a.StartTime {
+		return b.StartTime > a.StartTime
+	}
+	if b.EndTime != a.EndTime {
+		return b.EndTime > a.EndTime
+	}
+	if b.Index != a.Index {
+		return b.Index > a.Index
+	}
+	return true
 }
 
 func parseExtra(r resultJSON) ASRExtra {
@@ -135,13 +194,14 @@ func parseResults(r resultJSON) []ASRResult {
 			isInterim = *item.IsInterim
 		}
 		res := ASRResult{
-			Text:          item.Text,
-			Start:         item.StartTime,
-			End:           item.EndTime,
-			Confidence:    item.Confidence,
-			IsInterim:     isInterim,
-			IsVADFinished: item.IsVADFinished,
-			Index:         item.Index,
+			Text:            item.Text,
+			Start:           item.StartTime,
+			End:             item.EndTime,
+			Confidence:      item.Confidence,
+			IsInterim:       isInterim,
+			IsVADFinished:   item.IsVADFinished,
+			NonstreamResult: item.Extra.NonstreamResult,
+			Index:           item.Index,
 		}
 		for _, alt := range item.Alternatives {
 			a := Alternative{

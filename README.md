@@ -125,9 +125,13 @@ Stream incremental events:
 voxgate transcribe speech.wav --stream --format ndjson
 ```
 
-Streaming output uses `transcript.delta` for unstable partial text,
-`transcript.final` for one finalized utterance, and `stream.done` when the
-input source ends.
+Streaming NDJSON output uses `speech.started` for VAD start,
+`transcript.text.delta` for append-only text deltas,
+`transcript.text.update` when the editable transcript snapshot is revised,
+`transcript.segment.stable` when upstream reports a stable recognition phase,
+and `transcript.text.done` with the immutable full transcript when the input
+source ends. In `transcript.segment.stable`, `text` and `snapshot` both carry
+the upstream stable full transcript view.
 
 ## Live Audio
 
@@ -200,7 +204,7 @@ Endpoints:
 
 Errors use OpenAI-style JSON: `{"error":{"message":"...","type":"...","code":"..."}}`.
 When `stream=true`, `/v1/audio/transcriptions` returns server-sent events:
-`transcript.text.delta`, `transcript.text.done`, and `stream.done`.
+`transcript.text.delta` and `transcript.text.done`.
 
 ## Realtime WebSocket
 

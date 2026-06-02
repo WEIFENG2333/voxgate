@@ -3,3 +3,7 @@ dist/
 *.out.json
 *.probe.jsonl
 tests/audio/*.tmp.*
+
+# Local reverse-engineering artifacts
+docs/reverse-src/
+*.apk

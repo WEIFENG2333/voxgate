@@ -229,15 +229,22 @@ func (s *Server) streamSSE(requestID string, w http.ResponseWriter, events <-cha
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
+	doneSent := false
 	for ev := range events {
 		if ev.Type == asr.EventTranscriptDelta {
-			writeSSE(w, "transcript.text.delta", map[string]string{"type": "transcript.text.delta", "delta": ev.Text})
+			delta := ev.Delta
+			if delta == "" {
+				delta = ev.Text
+			}
+			if delta != "" {
+				writeSSE(w, "transcript.text.delta", map[string]string{"type": "transcript.text.delta", "delta": delta})
+			}
 		}
-		if ev.Type == asr.EventTranscriptFinal {
-			writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": ev.Text})
-		}
-		if ev.Type == asr.EventStreamDone {
-			writeSSE(w, "stream.done", map[string]string{"type": "stream.done"})
+		if ev.Type == asr.EventTranscriptDone {
+			if !doneSent {
+				writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": ev.Text})
+				doneSent = true
+			}
 		}
 		if ev.Type == asr.EventError && ev.Error != nil {
 			s.log.Error("transcription stream error", "request_id", requestID, "code", ev.Error.Code, "error", ev.Error.Message)

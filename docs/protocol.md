@@ -173,21 +173,92 @@ Recognition responses carry JSON in response field 7. Useful shapes:
 {"results":[{"text":"今天","is_interim":true}]}
 {"results":[{"text":"今天。","is_interim":false,"is_vad_finished":true}]}
 {"results":[{"text":"今天。","is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}
+{"results":[
+  {"text":"今天。明天","is_interim":true},
+  {"text":"今天。","is_interim":true,"extra":{"nonstream_result":true}},
+  {"text":"明天","start_time":2.1,"is_interim":true}
+]}
 ```
 
 Mapping:
 
-- `extra.vad_start=true` -> `vad.start`
-- `is_interim=true` -> interim delta
-- `is_interim=false` without final marker -> definite/two-pass delta
-- `extra.nonstream_result=true` or `!is_interim && is_vad_finished` -> final/three-pass result
+- `extra.vad_start=true` -> native `speech.started`
+- the first non-empty `results[]` entry is treated as the full editable display snapshot
+- append-only display changes -> `transcript.text.delta`
+- non-append display revisions -> `transcript.text.update` with the replacement snapshot
+- `extra.nonstream_result=true` or `!is_interim && is_vad_finished` -> `transcript.segment.stable`
+- input source/session end -> `transcript.text.done` with the full immutable transcript
 
 ## Utterance Boundaries
 
-The upstream result payload exposes utterance boundaries directly:
-`is_vad_finished=true` marks a finalized utterance and `index` increments for
-later utterances in the same WebSocket session. `voxgate` maps that final result
-to `transcript.final` and keeps the session open until the input source ends.
+The upstream result payload exposes stable recognition phases, but those phases
+are not necessarily permanent commits. In continuous microphone input the
+backend can later revise punctuation or merge a stable phrase with following
+speech. For that reason, `voxgate` treats `transcript.segment.stable` as
+metadata and keeps the authoritative transcript in the full display snapshot.
+Only `transcript.text.done` is immutable.
+
+For `transcript.segment.stable`, `text` and `snapshot` both carry the upstream
+stable full transcript view after applying that result. `voxgate` does not infer
+the newly stable suffix or sentence boundary because the upstream protocol does
+not expose that as an explicit field. Consumers that render subtitle lines
+should derive line breaks at the application layer from `snapshot` and `results`.
+
+When one upstream payload contains multiple `results`, those entries are treated
+as alternate views of the recognition state, not as strings to concatenate.
+In observed live traces, `results[0]` is the full display snapshot,
+`results[1]` often repeats the previous stable phrase, and `results[2]` can be
+the current in-progress phrase. Native NDJSON preserves all raw entries in
+verbose metadata and exposes `transcript.text.update` for non-append revisions
+that cannot be represented as OpenAI text deltas.
+
+Example native NDJSON stream for an upstream sequence that mixes cumulative and
+current-phrase results:
+
+```json
+{"type":"speech.started","request_id":"req_...","timestamp_ms":2172}
+{"type":"transcript.text.delta","request_id":"req_...","revision":1,"text":"最近","delta":"最近","snapshot":"最近"}
+{"type":"transcript.text.delta","request_id":"req_...","revision":2,"text":"我","delta":"我","snapshot":"最近我"}
+{"type":"transcript.text.update","request_id":"req_...","revision":3,"text":"最近我在使用 Unsopee 的 CloudCall。","snapshot":"最近我在使用 Unsopee 的 CloudCall。"}
+{"type":"transcript.segment.stable","request_id":"req_...","utterance_id":"seg_000000","text":"最近我在使用 Unsopee 的 CloudCall。","snapshot":"最近我在使用 Unsopee 的 CloudCall。"}
+{"type":"transcript.text.delta","request_id":"req_...","revision":4,"text":"确实","delta":"确实","snapshot":"最近我在使用 Unsopee 的 CloudCall。确实"}
+{"type":"transcript.text.update","request_id":"req_...","revision":5,"text":"最近我在使用 Unsopee 的 CloudCall，确实","snapshot":"最近我在使用 Unsopee 的 CloudCall，确实"}
+{"type":"transcript.text.delta","request_id":"req_...","revision":6,"text":"感觉挺好用的呢。","delta":"感觉挺好用的呢。","snapshot":"最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。"}
+{"type":"transcript.text.done","request_id":"req_...","text":"最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。","duration":9.71}
+```
+
+For `/v1/audio/transcriptions?stream=true`, only the OpenAI-compatible SSE
+events are exposed:
+
+```text
+event: transcript.text.delta
+data: {"type":"transcript.text.delta","delta":"你好呀。"}
+
+event: transcript.text.delta
+data: {"type":"transcript.text.delta","delta":"我觉得今天的天气不错"}
+
+event: transcript.text.delta
+data: {"type":"transcript.text.delta","delta":"。"}
+
+event: transcript.text.done
+data: {"type":"transcript.text.done","text":"你好呀。我觉得今天的天气不错。"}
+```
+
+If upstream revises earlier text instead of appending, native NDJSON carries the
+replacement as a snapshot update:
+
+```json
+{"type":"transcript.text.delta","delta":"天气不","snapshot":"天气不","revision":1}
+{"type":"transcript.text.update","text":"天气很好","snapshot":"天气很好","revision":2}
+{"type":"transcript.text.delta","delta":"。","snapshot":"天气很好。","revision":3}
+{"type":"transcript.segment.stable","text":"天气很好。","snapshot":"天气很好。","utterance_id":"seg_000000","revision":3}
+```
+
+The OpenAI-compatible SSE and Realtime outputs expose only append-only deltas;
+their final `done` / `completed` event is authoritative when a non-append
+revision occurred internally. Realtime may use `transcript.segment.stable` to
+produce low-latency `conversation.item.input_audio_transcription.completed`
+events because the official event model has no replacement-update event.
 
 ## Go State Machine
 
@@ -201,14 +272,14 @@ Single-session core flow:
 6. Send PCM frames as Opus `TaskRequest`
 7. Parse response JSON into typed events
 8. Aggregate reset segments
-9. Emit OpenAI-compatible final output
+9. Emit OpenAI-compatible terminal output
 
 Long-file batch flow:
 
 1. Decode whole input to 16 kHz mono PCM.
 2. Split into bounded PCM chunks on frame boundaries.
 3. Run the single-session state machine for each chunk.
-4. Concatenate chunk final texts.
+4. Concatenate chunk transcript.text.done values.
 5. In a later hardening pass, add small overlap and duplicate-boundary trimming.
 
 ## Test Matrix
@@ -217,7 +288,7 @@ Long-file batch flow:
 - Token cache and config priority tests
 - Opus frame encode test
 - Timestamp formatting tests for SRT/VTT
-- Utterance final and stream end tests
+- Stable-segment and transcript-done tests
 - Mock WebSocket three-pass flow
 - HTTP server JSON/SSE tests with a mock WebSocket backend
 - CLI command-surface tests for help and early format validation
@@ -229,5 +300,5 @@ Until the unanswered limits above are measured more thoroughly, `voxgate` should
 
 - CLI and HTTP file transcription transparently chunk long inputs.
 - Realtime mode remains single-session and bounded by backend behavior.
-- Tests should lock down chunk stitching, multi-utterance final handling, and empty-normal-close failure handling.
+- Tests should lock down chunk stitching, multi-utterance stable handling, and empty-normal-close failure handling.
 - E2E validation should report the chosen chunk size, total audio duration, elapsed wall time, and whether every chunk produced non-empty text.

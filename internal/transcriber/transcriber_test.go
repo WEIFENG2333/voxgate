@@ -71,6 +71,28 @@ func TestTranscribeChunksFallsBackOnEmptyChunk(t *testing.T) {
 	}
 }
 
+func TestTranscribeChunksFallsBackOnUpstreamSessionFailure(t *testing.T) {
+	src := silentSource(120 * time.Second)
+	client := fakeStreamClient{failAbove: fallbackChunkDuration}
+
+	res, err := Runner{}.transcribeChunks(context.Background(), client, src.Chunks(120*time.Second), asr.Options{Language: "zh"})
+	if err != nil {
+		t.Fatalf("transcribe chunks returned error: %v", err)
+	}
+	if got, want := res.Text, "partpart"; got != want {
+		t.Fatalf("text = %q, want %q", got, want)
+	}
+	if len(res.Segments) != 2 {
+		t.Fatalf("segments = %d, want 2", len(res.Segments))
+	}
+	if res.Segments[0].Start != 0 || res.Segments[0].End != 60 {
+		t.Fatalf("first segment time = %.0f..%.0f, want 0..60", res.Segments[0].Start, res.Segments[0].End)
+	}
+	if res.Segments[1].Start != 60 || res.Segments[1].End != 120 {
+		t.Fatalf("second segment time = %.0f..%.0f, want 60..120", res.Segments[1].Start, res.Segments[1].End)
+	}
+}
+
 func TestTranscribeChunksSkipsMinimumEmptyChunk(t *testing.T) {
 	src := silentSource(60 * time.Second)
 	client := fakeStreamClient{emptyAbove: 0}
@@ -87,18 +109,18 @@ func TestTranscribeChunksSkipsMinimumEmptyChunk(t *testing.T) {
 	}
 }
 
-func TestStreamChunksAggregatesFinalsAndSuppressesChunkDone(t *testing.T) {
+func TestStreamChunksAggregatesTranscriptDoneAndSuppressesStable(t *testing.T) {
 	src := silentSource(120 * time.Second)
 	client := &scriptedStreamClient{events: [][]asr.Event{
 		{
 			{Type: asr.EventTranscriptDelta, Text: "a"},
-			{Type: asr.EventTranscriptFinal, Text: "甲"},
-			{Type: asr.EventStreamDone},
+			{Type: asr.EventSegmentStable, Text: "甲"},
+			{Type: asr.EventTranscriptDone, Text: "甲"},
 		},
 		{
-			{Type: asr.EventTranscriptFinal, Text: "乙"},
-			{Type: asr.EventTranscriptFinal, Text: "丙"},
-			{Type: asr.EventStreamDone},
+			{Type: asr.EventSegmentStable, Text: "乙"},
+			{Type: asr.EventSegmentStable, Text: "丙"},
+			{Type: asr.EventTranscriptDone, Text: "乙丙"},
 		},
 	}}
 	out := make(chan asr.Event, 8)
@@ -109,31 +131,44 @@ func TestStreamChunksAggregatesFinalsAndSuppressesChunkDone(t *testing.T) {
 	for ev := range out {
 		got = append(got, ev)
 	}
-	if len(got) != 3 {
-		t.Fatalf("events = %#v, want 3 events", got)
+	if len(got) != 2 {
+		t.Fatalf("events = %#v, want 2 events", got)
 	}
 	if got[0].Type != asr.EventTranscriptDelta || got[0].Text != "a" {
 		t.Fatalf("first event = %#v, want delta a", got[0])
 	}
-	if got[1].Type != asr.EventTranscriptFinal || got[1].Text != "甲乙丙" {
-		t.Fatalf("final event = %#v, want aggregated final", got[1])
-	}
-	if got[2].Type != asr.EventStreamDone {
-		t.Fatalf("last event = %#v, want stream.done", got[2])
+	if got[1].Type != asr.EventTranscriptDone || got[1].Text != "甲乙丙" {
+		t.Fatalf("last event = %#v, want transcript.text.done", got[1])
 	}
 }
 
 type fakeStreamClient struct {
 	emptyAbove time.Duration
+	failAbove  time.Duration
 }
 
 func (f fakeStreamClient) Transcribe(_ context.Context, src asr.PCMFrameSource, _ asr.PCMFrameEncoder, _ asr.Options) (<-chan asr.Event, error) {
 	events := make(chan asr.Event, 4)
-	if f.emptyAbove == 0 || src.Duration() > f.emptyAbove {
+	if f.failAbove > 0 && src.Duration() > f.failAbove {
+		events <- asr.Event{
+			Type: asr.EventError,
+			Error: &asr.ErrorPayload{
+				Code:    "asr_error",
+				Message: "SessionFailed (code=50700000): GrpcError:forward request: rpc error: code = 13 desc = the stream is done",
+			},
+		}
 		close(events)
 		return events, nil
 	}
-	events <- asr.Event{Type: asr.EventTranscriptFinal, Text: "part", Duration: src.Duration().Seconds()}
+	if f.emptyAbove == 0 && f.failAbove == 0 {
+		close(events)
+		return events, nil
+	}
+	if f.emptyAbove > 0 && src.Duration() > f.emptyAbove {
+		close(events)
+		return events, nil
+	}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "part", Duration: src.Duration().Seconds()}
 	close(events)
 	return events, nil
 }

@@ -100,26 +100,26 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "asr_error", Message: err.Error()}}
 			return
 		}
-		var chunkText strings.Builder
+		var chunkText string
 		for ev := range events {
 			if ev.Type == asr.EventError {
 				out <- ev
 				return
 			}
-			if ev.Type == asr.EventTranscriptFinal {
-				chunkText.WriteString(ev.Text)
+			if ev.Type == asr.EventTranscriptDone {
+				chunkText = ev.Text
 				continue
 			}
-			if ev.Type == asr.EventStreamDone {
+			if ev.Type == asr.EventSegmentStable {
 				continue
 			}
 			out <- ev
 		}
-		b.WriteString(chunkText.String())
+		b.WriteString(chunkText)
 		offset += chunk.Duration().Seconds()
 	}
-	out <- asr.Event{Type: asr.EventTranscriptFinal, Text: b.String(), Duration: offset}
-	out <- asr.Event{Type: asr.EventStreamDone, Duration: offset}
+	text := b.String()
+	out <- asr.Event{Type: asr.EventTranscriptDone, Text: text, Duration: offset}
 }
 
 func (r Runner) transcribeChunks(ctx context.Context, client streamClient, chunks []*audio.Source, opts asr.Options) (asr.Result, error) {
@@ -148,15 +148,16 @@ func (r Runner) transcribeChunkWithFallback(ctx context.Context, client streamCl
 			return normalizeChunkResult(res, opts.Language, offset, chunk.Duration().Seconds(), nextSegmentIndex), nil
 		}
 	}
-	if !errors.Is(err, ErrEmptyTranscript) || chunk.Duration() <= fallbackChunkDuration {
+	if !shouldFallbackChunk(err, chunk.Duration()) {
 		if errors.Is(err, ErrEmptyTranscript) {
 			return asr.Result{Language: opts.Language, Duration: chunk.Duration().Seconds()}, nil
 		}
 		return asr.Result{}, err
 	}
 
-	// Some long chunks complete with an empty transcript even though smaller
-	// slices work. Retry recursively at a smaller duration before giving up.
+	// Some long chunks hit upstream session limits or complete with an empty
+	// transcript even though smaller slices work. Retry recursively at a smaller
+	// duration before giving up.
 	var combined asr.Result
 	var b strings.Builder
 	subOffset := offset
@@ -173,6 +174,18 @@ func (r Runner) transcribeChunkWithFallback(ctx context.Context, client streamCl
 	combined.Language = opts.Language
 	combined.Duration = chunk.Duration().Seconds()
 	return combined, nil
+}
+
+func shouldFallbackChunk(err error, duration time.Duration) bool {
+	if err == nil || duration <= fallbackChunkDuration {
+		return false
+	}
+	if errors.Is(err, ErrEmptyTranscript) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "SessionFailed") ||
+		strings.Contains(message, "stream is done")
 }
 
 func transcribeOne(ctx context.Context, client streamClient, src *audio.Source, opts asr.Options) (asr.Result, error) {
@@ -223,14 +236,12 @@ func normalizeChunkResult(res asr.Result, language string, offset, duration floa
 
 func collect(events <-chan asr.Event) (asr.Result, error) {
 	var result asr.Result
-	var text strings.Builder
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			return result, fmt.Errorf("%s", ev.Error.Message)
 		}
-		if ev.Type == asr.EventTranscriptFinal {
-			text.WriteString(ev.Text)
-			result.Text = text.String()
+		if ev.Type == asr.EventTranscriptDone {
+			result.Text = ev.Text
 			result.Duration = ev.Duration
 			result.Language = "zh"
 			result.Results = ev.Results

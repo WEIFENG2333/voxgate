@@ -259,6 +259,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 		_ = writeRealtimeTranscriptionFailed(rw, itemID, err)
 		return
 	}
+	lastCompletedText := ""
 	for ev := range events {
 		if ev.Type == asr.EventTranscriptDelta {
 			_ = writeRealtimeJSON(rw, map[string]any{
@@ -266,10 +267,11 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 				"event_id":      newRealtimeEventID(),
 				"item_id":       itemID,
 				"content_index": 0,
-				"delta":         ev.Text,
+				"delta":         ev.Delta,
 			})
 		}
-		if ev.Type == asr.EventTranscriptFinal {
+		if (ev.Type == asr.EventSegmentStable || ev.Type == asr.EventTranscriptDone) && ev.Text != "" && ev.Text != lastCompletedText {
+			lastCompletedText = ev.Text
 			s.log.Debug("realtime transcription completed", "item_id", itemID, "chars", len(ev.Text))
 			_ = writeRealtimeJSON(rw, map[string]any{
 				"type":          "conversation.item.input_audio_transcription.completed",

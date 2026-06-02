@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -430,19 +429,14 @@ func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func(
 
 func readRealtimeCompleted(t *testing.T, conn *websocket.Conn) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-			t.Fatal(err)
-		}
+	// 单次总 deadline + 连续读，不在读超时后重试读：gorilla websocket 读失败后再读会 panic。
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
 		var msg map[string]any
-		err := conn.ReadJSON(&msg)
-		if err != nil {
-			var netErr interface{ Timeout() bool }
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			t.Fatal(err)
+		if err := conn.ReadJSON(&msg); err != nil {
+			t.Fatalf("did not receive realtime completed event: %v", err)
 		}
 		switch msg["type"] {
 		case "conversation.item.input_audio_transcription.completed":
@@ -451,8 +445,6 @@ func readRealtimeCompleted(t *testing.T, conn *websocket.Conn) map[string]any {
 			t.Fatalf("unexpected realtime error: %v", msg)
 		}
 	}
-	t.Fatal("did not receive realtime completed event")
-	return nil
 }
 
 func parseRequestMethod(data []byte) (string, error) {

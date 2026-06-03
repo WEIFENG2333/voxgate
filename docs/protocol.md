@@ -70,7 +70,6 @@ Session JSON:
     "enable_asr_twopass": true,
     "use_twopass_retry": true,
     "strong_ddc": true,
-    "end_smooth_window_ms": 800,
     "remove_space_between_han_num": true,
     "remove_space_between_han_eng": true,
     "enable_print_chinese": false,
@@ -88,12 +87,16 @@ opus` builds. The `extra` object tunes recognition and output formatting:
 | `enable_asr_twopass` / `enable_asr_threepass` | enable the second and third recognition passes; the third pass produces the most accurate final text |
 | `use_twopass_retry` | retry the second pass when the first result is low confidence |
 | `strong_ddc` | strengthen the disfluency/text-correction model; the main lever for cleaner, better-corrected output |
-| `end_smooth_window_ms` | VAD end-of-speech smoothing window in milliseconds; affects how completely an utterance is closed before finalizing |
 | `remove_space_between_han_num` / `remove_space_between_han_eng` | drop spaces between Han characters and digits / Latin letters in the output |
 | `enable_print_chinese` | when false, keep digits as Arabic numerals instead of spelling them in Chinese |
 | `disable_user_words` | when false, apply the account's uploaded personal lexicon during recognition (see Personalization) |
 | `cell_compress_rate` | upstream cellular-network compression hint |
 | `context` | base64 session context (see Session Context) |
+
+`voxgate` intentionally omits the upstream `end_smooth_window_ms` VAD field. A
+fixed end-of-speech window tuned for live microphone input prematurely closes
+utterances during faster-than-realtime file upload and drops trailing segments;
+the server default handles both file and live pacing.
 
 ### Session Context
 

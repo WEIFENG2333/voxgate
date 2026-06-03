@@ -166,14 +166,16 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 		"audio_info":              map[string]any{"channel": UpstreamChannels, "format": audioFormat, "sample_rate": UpstreamSampleRate},
 		"enable_punctuation":      opts.EnablePunctuation,
 		"enable_speech_rejection": false,
-		// strong_ddc/use_twopass_retry/end_smooth_window_ms drive correction,
-		// retry and VAD smoothing; the han spacing and print flags control output
-		// formatting; disable_user_words=false lets the uploaded personal lexicon
-		// apply during recognition.
+		// strong_ddc/use_twopass_retry drive correction and retry; the han spacing
+		// and print flags control output formatting; disable_user_words=false lets
+		// the uploaded personal lexicon apply during recognition. The VAD
+		// end-smooth window is deliberately left to the server default: a fixed
+		// value tuned for live mic prematurely closes utterances during the
+		// faster-than-realtime file upload and drops trailing segments.
 		"extra": map[string]any{
 			"app_name": "com.android.chrome", "cell_compress_rate": 8, "did": creds.DeviceID,
 			"enable_asr_threepass": opts.EnableThreePass, "enable_asr_twopass": opts.EnableTwoPass, "input_mode": "tool",
-			"strong_ddc": true, "use_twopass_retry": true, "end_smooth_window_ms": 800,
+			"strong_ddc": true, "use_twopass_retry": true,
 			"remove_space_between_han_num": true, "remove_space_between_han_eng": true, "enable_print_chinese": false,
 			"disable_user_words": false,
 			"context":            buildContextInfo("com.android.chrome", opts.Prompt),

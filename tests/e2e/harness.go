@@ -363,6 +363,9 @@ func runServerCases(ctx context.Context, bin, configPath, audioPath string) erro
 	if err := runHTTPTranscription(ctx, baseURL, audioPath); err != nil {
 		return err
 	}
+	if err := runOpenAIGoSDKTranscription(ctx, baseURL, audioPath); err != nil {
+		return err
+	}
 	if err := runSSETranscription(ctx, baseURL, audioPath); err != nil {
 		return err
 	}
@@ -393,6 +396,21 @@ func runHTTPTranscription(ctx context.Context, baseURL, audioPath string) error 
 		return fmt.Errorf("HTTP transcription status %d: %s", resp.StatusCode, string(data))
 	}
 	return assertJSONText(string(data))
+}
+
+func runOpenAIGoSDKTranscription(ctx context.Context, baseURL, audioPath string) error {
+	absAudio, err := filepath.Abs(audioPath)
+	if err != nil {
+		return err
+	}
+	out, err := runCmdInDir(ctx, filepath.Join("tests", "e2e", "openai-go-client"), nil, "go", "run", ".", "--base-url", baseURL+"/v1", "--api-key", "test-token", absAudio)
+	if err != nil {
+		return fmt.Errorf("OpenAI Go SDK transcription: %w\n%s", err, out)
+	}
+	if !strings.Contains(out, expectedText) {
+		return fmt.Errorf("OpenAI Go SDK output missing expected text:\n%s", out)
+	}
+	return nil
 }
 
 func runSSETranscription(ctx context.Context, baseURL, audioPath string) error {
@@ -510,7 +528,12 @@ func readPCM(ctx context.Context, path string) ([]byte, error) {
 }
 
 func runCmd(ctx context.Context, stdin []byte, name string, args ...string) (string, error) {
+	return runCmdInDir(ctx, "", stdin, name, args...)
+}
+
+func runCmdInDir(ctx context.Context, dir string, stdin []byte, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

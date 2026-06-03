@@ -44,6 +44,7 @@ Covered paths:
 - CLI stdin PCM streaming with `--input-format pcm16 --stream`
 - raw ASR trace validation for `StartSession.audio_info.format=raw` and 640-byte PCM frames
 - HTTP `/v1/audio/transcriptions`
+- OpenAI Go SDK `audio.transcriptions.create` against the local `/v1` server
 - HTTP streaming SSE
 - WebSocket `/v1/realtime`
 - server config propagation for `asr.websocket_url`

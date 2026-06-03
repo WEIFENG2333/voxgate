@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	DefaultChunkDuration      = 300 * time.Second
+	DefaultChunkDuration      = 30 * time.Second
 	DefaultLongAudioThreshold = DefaultChunkDuration
 	fallbackChunkDuration     = 60 * time.Second
 

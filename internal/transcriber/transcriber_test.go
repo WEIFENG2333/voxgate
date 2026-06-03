@@ -11,8 +11,8 @@ import (
 )
 
 func TestDefaultChunkPolicy(t *testing.T) {
-	if DefaultChunkDuration != 300*time.Second {
-		t.Fatalf("default chunk duration = %v, want 300s", DefaultChunkDuration)
+	if DefaultChunkDuration != 30*time.Second {
+		t.Fatalf("default chunk duration = %v, want 30s", DefaultChunkDuration)
 	}
 	if DefaultLongAudioThreshold != DefaultChunkDuration {
 		t.Fatalf("default long-audio threshold = %v, want chunk duration %v", DefaultLongAudioThreshold, DefaultChunkDuration)
@@ -40,12 +40,16 @@ func TestChunkPolicyOverrides(t *testing.T) {
 }
 
 func TestStreamChunkDurationCapsAtFallbackDuration(t *testing.T) {
-	if got := (Runner{}).streamChunkDuration(); got != fallbackChunkDuration {
-		t.Fatalf("default stream chunk duration = %v, want %v", got, fallbackChunkDuration)
+	if got := (Runner{}).streamChunkDuration(); got != DefaultChunkDuration {
+		t.Fatalf("default stream chunk duration = %v, want %v", got, DefaultChunkDuration)
 	}
 	r := Runner{Config: Config{ChunkDuration: 30 * time.Second}}
 	if got := r.streamChunkDuration(); got != 30*time.Second {
 		t.Fatalf("short stream chunk duration = %v, want 30s", got)
+	}
+	r = Runner{Config: Config{ChunkDuration: 90 * time.Second}}
+	if got := r.streamChunkDuration(); got != fallbackChunkDuration {
+		t.Fatalf("large stream chunk duration = %v, want %v", got, fallbackChunkDuration)
 	}
 }
 

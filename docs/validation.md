@@ -81,7 +81,7 @@ Latest observed matrix:
 Interpretation:
 
 - short and medium files are accepted in one session
-- 300 s chunks are below the observed failure point and reduce handshake overhead compared with the previous 55 s conservative default
+- 30 s chunks are more conservative than the observed transport limit, but preserve substantially more text from long IME-style sessions than 60 s or 300 s chunks
 - realtime pacing is not necessary for 60 s file input
 - long single-session file transcription is not reliable
 - automatic chunking is required for long file mode
@@ -135,7 +135,7 @@ Long-file validation from 71 concatenated AISHELL utterances:
 
 | Duration | Mode | Exit | Elapsed | Output |
 |---:|---|---:|---:|---:|
-| 360 s | default auto chunk (`300s + 60s`) | 0 | 40 s | 2812 bytes JSON |
+| 603 s | default auto chunk (`30s` chunks) | 0 | 165 s | 5042 bytes JSON |
 
 ## OpenAI SDK Probe
 

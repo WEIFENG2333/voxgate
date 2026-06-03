@@ -277,7 +277,7 @@ Common `transcribe` options:
 | `--input-format wav|pcm16|raw` | stdin input format |
 | `--sample-rate <hz>` | raw PCM sample rate |
 | `--request-timeout <duration>` | per-session timeout |
-| `--chunk-duration <duration>` | long-file chunk size, default `300s` |
+| `--chunk-duration <duration>` | long-file chunk size, default `30s` |
 | `--trace-asr <file>` | write raw upstream ASR WebSocket frames as NDJSON |
 | `--no-punctuation` | disable punctuation |
 | `--disable-three-pass` | disable the third recognition pass |
@@ -331,8 +331,8 @@ The upstream backend behaves like an input-method ASR service, not a dedicated l
 
 | Input length | Behavior |
 |---|---|
-| `<= 300s` | one WebSocket session |
-| `> 300s` | serial 300-second chunks |
+| `<= 30s` | one WebSocket session |
+| `> 30s` | serial 30-second chunks |
 
 SRT/VTT timestamps are coarse chunk/segment ranges, not precise word-level subtitle timing.
 

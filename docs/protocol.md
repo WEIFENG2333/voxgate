@@ -121,6 +121,24 @@ Default builds send the 20 ms PCM frame directly and declare
 and declare `audio_info.format=speech_opus`. The final marker is a last frame
 with frame_state `9`, followed by `FinishSession`.
 
+Observed `audio_info.format` behavior on the IME protobuf WebSocket:
+
+| Declared format | Wire payload tested | Result |
+|---|---|---|
+| `raw` | 20 ms PCM frames | works |
+| `pcm` | 20 ms PCM frames | works |
+| `wav` | 20 ms PCM frames | works, but no WAV container was sent |
+| `aac` | 20 ms PCM frames | works, but no AAC frames were sent |
+| `acc` | 20 ms PCM frames | works, treated like the APK enum spelling observed by user research |
+| `opus` | 20 ms PCM frames | works, but this is not the official Opus wire shape |
+| `speech_opus` | Opus frames | works |
+| `speech_opus` | 20 ms PCM frames | fails |
+| `raw`/`pcm`/`wav`/`aac`/`acc`/`opus` | Opus frames | no transcript |
+
+The practical choices are therefore `raw` with PCM payload for portable builds,
+or `speech_opus` with Opus payload for compressed upstream audio. The other
+declared values are compatibility observations, not recommended client modes.
+
 ## Observed Runtime Limits
 
 These are empirical findings from local probes against the real endpoint, not guaranteed protocol documentation:
@@ -151,7 +169,7 @@ The client should choose strategy by input mode:
 
 Recommended defaults:
 
-- chunk long files at 300 seconds by default; this is below the observed 540 s failure point while avoiding excessive handshakes
+- chunk long files at 30 seconds by default; longer chunks can succeed but often return only the current IME transcript window instead of complete text
 - use fresh `request_id` per chunk/session
 - reuse cached device credentials and token across chunks
 - retry one failed session after token refresh

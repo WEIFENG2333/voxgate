@@ -229,6 +229,27 @@ func TestWriteTextStreamEventsDoesNotReplayStablePrefixRevisions(t *testing.T) {
 	}
 }
 
+func TestWriteTextStreamEventsShowsSegmentLocalSnapshotsAfterStable(t *testing.T) {
+	events := make(chan asr.Event, 6)
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "第一句"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "第一句", Snapshot: "第一句"}
+	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "第二"}
+	events <- asr.Event{Type: asr.EventTranscriptUpdate, Snapshot: "第二句"}
+	events <- asr.Event{Type: asr.EventSegmentStable, Text: "第二句", Snapshot: "第二句"}
+	events <- asr.Event{Type: asr.EventTranscriptDone, Text: "第一句。第二句。"}
+	close(events)
+
+	var buf bytes.Buffer
+	display := textStreamDisplay{Interactive: true, Width: 80}
+	if got := writeTextStreamEvents(&buf, events, display); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	want := "\r\033[2K第一句\r\033[2K第一句\n\r\033[2K第二\r\033[2K第二句\r\033[2K第二句\n\nFinal:\n第一句。第二句。\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestWriteTextStreamEventsPrintsFinalTextAsSeparateBlockAfterStableSegment(t *testing.T) {
 	events := make(chan asr.Event, 6)
 	events <- asr.Event{Type: asr.EventTranscriptDelta, Snapshot: "我看看现在的效果怎么样"}

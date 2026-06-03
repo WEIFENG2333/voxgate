@@ -268,9 +268,9 @@ type textStreamDisplay struct {
 
 func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStreamDisplay) int {
 	lineOpen := false
-	committedRunes := 0
+	committedSnapshot := ""
 	currentLine := ""
-	currentSnapshotRunes := 0
+	currentSnapshot := ""
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			if display.Interactive && lineOpen {
@@ -287,13 +287,13 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 			if !display.Interactive {
 				continue
 			}
-			preview, snapshotRunes := display.eventPreview(committedRunes, ev)
+			preview, snapshot := display.eventPreview(committedSnapshot, ev)
 			if err := display.writePreview(w, preview); err != nil {
 				printErr("format_error", err)
 				return 1
 			}
 			currentLine = preview
-			currentSnapshotRunes = snapshotRunes
+			currentSnapshot = snapshot
 			lineOpen = true
 		case asr.EventSegmentStable:
 			if !display.Interactive {
@@ -312,11 +312,11 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 					return 1
 				}
 			}
-			if currentSnapshotRunes > committedRunes {
-				committedRunes = currentSnapshotRunes
+			if currentSnapshot != "" {
+				committedSnapshot = currentSnapshot
 			}
 			currentLine = ""
-			currentSnapshotRunes = committedRunes
+			currentSnapshot = committedSnapshot
 		case asr.EventTranscriptDone:
 			if display.Interactive {
 				if lineOpen {
@@ -329,7 +329,7 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 				if ev.Text == "" {
 					continue
 				}
-				if committedRunes > 0 || currentLine != "" {
+				if committedSnapshot != "" || currentLine != "" {
 					if _, err := fmt.Fprintln(w); err != nil {
 						printErr("format_error", err)
 						return 1
@@ -340,7 +340,7 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 					return 1
 				}
 				currentLine = ""
-				currentSnapshotRunes = committedRunes
+				currentSnapshot = committedSnapshot
 				continue
 			}
 			if ev.Text == "" {
@@ -351,7 +351,7 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 				return 1
 			}
 			currentLine = ""
-			currentSnapshotRunes = committedRunes
+			currentSnapshot = committedSnapshot
 		}
 	}
 	if display.Interactive && lineOpen {
@@ -363,11 +363,11 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 	return 0
 }
 
-func (d textStreamDisplay) eventPreview(committedRunes int, ev asr.Event) (string, int) {
+func (d textStreamDisplay) eventPreview(committedSnapshot string, ev asr.Event) (string, string) {
 	if ev.Snapshot == "" {
-		return ev.Text, committedRunes + runeLen(ev.Text)
+		return ev.Text, ev.Text
 	}
-	return d.pendingText(committedRunes, ev.Snapshot), runeLen(ev.Snapshot)
+	return d.pendingText(committedSnapshot, ev.Snapshot), ev.Snapshot
 }
 
 func (d textStreamDisplay) writePreview(w io.Writer, text string) error {
@@ -383,15 +383,37 @@ func clearLine(w io.Writer) error {
 	return err
 }
 
-func (d textStreamDisplay) pendingText(committedRunes int, snapshot string) string {
-	if committedRunes <= 0 {
+func (d textStreamDisplay) pendingText(committedSnapshot, snapshot string) string {
+	if committedSnapshot == "" {
 		return snapshot
 	}
+	if strings.HasPrefix(snapshot, committedSnapshot) {
+		return strings.TrimPrefix(snapshot, committedSnapshot)
+	}
+	committedRunes := runeLen(committedSnapshot)
 	runes := []rune(snapshot)
 	if committedRunes >= len(runes) {
-		return ""
+		return snapshot
+	}
+	if commonPrefixRunes(committedSnapshot, snapshot) < committedRunes-1 {
+		return snapshot
 	}
 	return string(runes[committedRunes:])
+}
+
+func commonPrefixRunes(a, b string) int {
+	ar := []rune(a)
+	br := []rune(b)
+	n := len(ar)
+	if len(br) < n {
+		n = len(br)
+	}
+	for i := 0; i < n; i++ {
+		if ar[i] != br[i] {
+			return i
+		}
+	}
+	return n
 }
 
 func runeLen(s string) int {

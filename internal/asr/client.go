@@ -171,6 +171,7 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 			"enable_asr_threepass": opts.EnableThreePass, "enable_asr_twopass": opts.EnableTwoPass, "input_mode": "tool",
 			"strong_ddc": true, "use_twopass_retry": true, "end_smooth_window_ms": 800,
 			"remove_space_between_han_num": true, "remove_space_between_han_eng": true, "enable_print_chinese": false,
+			"disable_user_words": false,
 		},
 	})
 	if err := send(asrproto.Request{Token: creds.Token, ServiceName: ServiceNameASR, MethodName: MethodStartSession, Payload: string(sessionPayload), RequestID: requestID}); err != nil {

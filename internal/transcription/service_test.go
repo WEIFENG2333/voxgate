@@ -50,9 +50,10 @@ func TestFromAppConfig(t *testing.T) {
 	cfg.ASR.UserAgent = "ua"
 	cfg.ASR.Hotwords = []string{"Claude", "Anthropic"}
 	cfg.ASR.AudioFormat = "pcm"
+	cfg.ASR.WebSocketURL = "ws://127.0.0.1:9999/ws"
 	cfg.Server.RequestTimeout = "3m"
 	svc := FromAppConfig(cfg)
-	if svc.Config.CredentialPath != "creds.json" || svc.Config.UserAgent != "ua" || svc.Config.AudioFormat != "pcm" {
+	if svc.Config.CredentialPath != "creds.json" || svc.Config.UserAgent != "ua" || svc.Config.AudioFormat != "pcm" || svc.Config.WebSocketURL != "ws://127.0.0.1:9999/ws" {
 		t.Fatalf("bad config mapping: %+v", svc.Config)
 	}
 	if !reflect.DeepEqual(svc.Config.Hotwords, []string{"Claude", "Anthropic"}) {

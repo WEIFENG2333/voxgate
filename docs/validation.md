@@ -26,6 +26,31 @@ Passed packages:
 - HTTP JSON and SSE endpoints with mock WebSocket backend
 - CLI help and early format validation
 
+## Deterministic E2E Harness
+
+```bash
+make test-e2e
+```
+
+The default E2E path is CI-safe. It starts a local WebSocket server that speaks
+the observed upstream protobuf envelope and replays committed ResultJSON
+fixtures captured from a real transcription session. The mock validates the
+client request sequence and audio metadata instead of returning arbitrary
+test-only JSON.
+
+Covered paths:
+
+- CLI file transcription for `json`, `text`, `verbose_json`, `srt`, `vtt`, and `ndjson`
+- CLI stdin PCM streaming with `--input-format pcm16 --stream`
+- raw ASR trace validation for `StartSession.audio_info.format=raw` and 640-byte PCM frames
+- HTTP `/v1/audio/transcriptions`
+- HTTP streaming SSE
+- WebSocket `/v1/realtime`
+- server config propagation for `asr.websocket_url`
+
+The harness caught and now guards against a real regression where non-streaming
+`verbose_json` dropped upstream `results` from stable segment events.
+
 ## Real Protocol Probe
 
 Probe command:
@@ -136,6 +161,5 @@ Both returned:
 ## Remaining Gaps
 
 - Need a larger licensed fixture set committed or downloaded by script rather than relying on a local workspace sample.
-- Need OpenAI Python and Go SDK smoke tests wired into one command for CI-safe mock mode.
 - Need WER calculation once fixtures include reference transcripts.
 - Need a future subtitle-timing layer if precise SRT/VTT alignment is required.

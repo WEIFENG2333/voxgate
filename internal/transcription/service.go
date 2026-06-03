@@ -60,6 +60,7 @@ func FromAppConfig(cfg config.Config) Service {
 	return New(Config{
 		CredentialPath:    cfg.CredentialPath,
 		UserAgent:         cfg.ASR.UserAgent,
+		WebSocketURL:      cfg.ASR.WebSocketURL,
 		AudioFormat:       cfg.ASR.AudioFormat,
 		EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass:   cfg.ASR.EnableThreePass,

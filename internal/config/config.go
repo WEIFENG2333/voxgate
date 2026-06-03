@@ -23,6 +23,7 @@ type Config struct {
 		EnableTwoPass     bool     `yaml:"enable_two_pass"`
 		UserAgent         string   `yaml:"user_agent"`
 		AudioFormat       string   `yaml:"audio_format"`
+		WebSocketURL      string   `yaml:"websocket_url"`
 		Hotwords          []string `yaml:"hotwords"`
 	} `yaml:"asr"`
 	Server struct {
@@ -75,6 +76,9 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("VOXGATE_ASR_AUDIO_FORMAT"); v != "" {
 		c.ASR.AudioFormat = v
+	}
+	if v := os.Getenv("VOXGATE_ASR_WEBSOCKET_URL"); v != "" {
+		c.ASR.WebSocketURL = v
 	}
 	if v := os.Getenv("VOXGATE_ASR_HOTWORDS"); v != "" {
 		c.ASR.Hotwords = SplitList(v)

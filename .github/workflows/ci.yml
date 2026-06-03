@@ -66,3 +66,6 @@ jobs:
         run: go test -race ./...
       - name: Build
         run: go build ./cmd/voxgate
+      - name: E2E harness
+        if: runner.os == 'Linux'
+        run: make test-e2e

@@ -50,6 +50,73 @@ func MarshalRequest(req Request) []byte {
 	return b
 }
 
+// UnmarshalRequest decodes the observed upstream protobuf request envelope.
+// It is primarily used by protocol-level E2E tests to make the mock upstream
+// validate the same fields that the real upstream receives.
+func UnmarshalRequest(data []byte) (Request, error) {
+	var req Request
+	for off := 0; off < len(data); {
+		tag, n, err := readVarint(data, off)
+		if err != nil {
+			return req, err
+		}
+		off = n
+		field := int(tag >> 3)
+		wire := int(tag & 7)
+		switch wire {
+		case 0:
+			v, n, err := readVarint(data, off)
+			if err != nil {
+				return req, err
+			}
+			off = n
+			if field == 9 {
+				req.FrameState = FrameState(v)
+			}
+		case 2:
+			l, n, err := readVarint(data, off)
+			if err != nil {
+				return req, err
+			}
+			off = n
+			end := off + int(l)
+			if end < off || end > len(data) {
+				return req, errors.New("protobuf: truncated length-delimited field")
+			}
+			raw := data[off:end]
+			s := string(raw)
+			off = end
+			switch field {
+			case 2:
+				req.Token = s
+			case 3:
+				req.ServiceName = s
+			case 5:
+				req.MethodName = s
+			case 6:
+				req.Payload = s
+			case 7:
+				req.AudioData = append(req.AudioData[:0], raw...)
+			case 8:
+				req.RequestID = s
+			}
+		case 1:
+			if off+8 > len(data) {
+				return req, errors.New("protobuf: truncated fixed64 field")
+			}
+			off += 8
+		case 5:
+			if off+4 > len(data) {
+				return req, errors.New("protobuf: truncated fixed32 field")
+			}
+			off += 4
+		default:
+			return req, fmt.Errorf("protobuf: unsupported wire type %d", wire)
+		}
+	}
+	return req, nil
+}
+
 func UnmarshalResponse(data []byte) (Response, error) {
 	var resp Response
 	for off := 0; off < len(data); {

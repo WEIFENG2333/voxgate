@@ -283,22 +283,50 @@ func normalizeChunkResult(res asr.Result, language string, offset, duration floa
 
 func collect(events <-chan asr.Event) (asr.Result, error) {
 	var result asr.Result
+	nextSegmentIndex := 0
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			return result, fmt.Errorf("%s", ev.Error.Message)
+		}
+		if ev.Type == asr.EventSegmentStable {
+			if ev.Text != "" {
+				result.Segments = append(result.Segments, asr.Segment{Index: nextSegmentIndex, Text: ev.Text, Start: ev.Start, End: ev.End})
+				nextSegmentIndex++
+			}
+			if len(ev.Results) > 0 {
+				result.Results = ev.Results
+			}
+			if hasExtra(ev.Extra) {
+				result.Extra = ev.Extra
+			}
 		}
 		if ev.Type == asr.EventTranscriptDone {
 			result.Text = ev.Text
 			result.Duration = ev.Duration
 			result.Language = "zh"
-			result.Results = ev.Results
-			result.Extra = ev.Extra
+			if len(ev.Results) > 0 {
+				result.Results = ev.Results
+			}
+			if hasExtra(ev.Extra) {
+				result.Extra = ev.Extra
+			}
 		}
 	}
 	if strings.TrimSpace(result.Text) == "" {
 		return result, ErrEmptyTranscript
 	}
 	return result, nil
+}
+
+func hasExtra(extra *asr.ASRExtra) bool {
+	return extra != nil && (extra.AudioDuration != nil ||
+		extra.ModelAvgRTF != nil ||
+		extra.ModelSendFirstResponse != nil ||
+		extra.ModelTotalProcessTime != nil ||
+		extra.SpeechAdaptationVersion != "" ||
+		extra.PacketNumber != 0 ||
+		extra.VADStart ||
+		len(extra.ReqPayload) > 0)
 }
 
 func (r Runner) threshold() time.Duration {

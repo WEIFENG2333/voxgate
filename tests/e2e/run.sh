@@ -15,10 +15,15 @@ if [[ ! -f "$SAMPLE" ]]; then
   ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=1" -ac 1 -ar 16000 "$SAMPLE"
 fi
 
+echo "running deterministic E2E harness with a protocol-faithful mock upstream"
+(cd "$ROOT" && go run ./tests/e2e/harness.go --bin "$BIN" --audio "$AUDIO_DIR/zh_5s.wav")
+
+echo "running local doctor smoke"
 "$BIN" doctor
 
-echo "Local smoke sample generated at $SAMPLE"
+echo "local smoke sample generated at $SAMPLE"
 if [[ -n "${VOXGATE_REAL_SAMPLE:-}" && -f "${VOXGATE_REAL_SAMPLE:-}" ]]; then
+  echo "running optional real-upstream E2E against $VOXGATE_REAL_SAMPLE"
   ffmpeg -hide_banner -loglevel error -i "$VOXGATE_REAL_SAMPLE" -t 5 -ac 1 -ar 16000 "$AUDIO_DIR/real_5s.wav" -y
   ffmpeg -hide_banner -loglevel error -i "$AUDIO_DIR/real_5s.wav" "$AUDIO_DIR/real_5s.mp3" -y
   ffmpeg -hide_banner -loglevel error -i "$AUDIO_DIR/real_5s.wav" -c:a aac -strict experimental -b:a 64k "$AUDIO_DIR/real_5s.m4a" -y

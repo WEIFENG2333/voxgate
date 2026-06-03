@@ -20,6 +20,22 @@ func TestMarshalRequestFieldNumbers(t *testing.T) {
 	}
 }
 
+func TestUnmarshalRequest(t *testing.T) {
+	data := MarshalRequest(Request{
+		Token: "tok", ServiceName: "ASR", MethodName: "TaskRequest", Payload: "{}", AudioData: []byte{1, 2}, RequestID: "rid", FrameState: FrameStateLast,
+	})
+	req, err := UnmarshalRequest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Token != "tok" || req.ServiceName != "ASR" || req.MethodName != "TaskRequest" || req.Payload != "{}" || req.RequestID != "rid" || req.FrameState != FrameStateLast {
+		t.Fatalf("bad request: %+v", req)
+	}
+	if string(req.AudioData) != string([]byte{1, 2}) {
+		t.Fatalf("bad audio data: %x", req.AudioData)
+	}
+}
+
 func TestUnmarshalResponse(t *testing.T) {
 	data := append(MarshalResponse(Response{RequestID: "rid", MessageType: "SessionFinished", StatusCode: 200, StatusMessage: "OK", ResultJSON: `{"results":[]}`}), 0x5a, 0x03, 'x', 'y', 'z')
 	resp, err := UnmarshalResponse(data)

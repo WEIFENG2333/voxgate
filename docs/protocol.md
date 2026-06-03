@@ -296,6 +296,9 @@ Long-file batch flow:
 - Mock WebSocket three-pass flow
 - HTTP server JSON/SSE tests with a mock WebSocket backend
 - CLI command-surface tests for help and early format validation
+- Deterministic E2E harness with a protocol-faithful mock upstream, covering
+  CLI formats, stdin streaming, HTTP transcription, SSE, Realtime WebSocket,
+  and raw trace validation
 - Real endpoint e2e scripts are included but require network access and a working non-public endpoint
 
 ## Current Strategy Decision

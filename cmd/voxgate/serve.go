@@ -49,6 +49,7 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 		EnableThreePass:   cfg.ASR.EnableThreePass,
 		EnableTwoPass:     cfg.ASR.EnableTwoPass,
 		AudioFormat:       cfg.ASR.AudioFormat,
+		WebSocketURL:      cfg.ASR.WebSocketURL,
 		UserAgent:         cfg.ASR.UserAgent,
 		LogLevel:          cfg.LogLevel,
 		JSONLogs:          g.jsonLogs,

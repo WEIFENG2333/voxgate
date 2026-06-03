@@ -65,12 +65,97 @@ Session JSON:
     "app_name": "com.android.chrome",
     "cell_compress_rate": 8,
     "did": "<device_id>",
+    "input_mode": "tool",
     "enable_asr_threepass": true,
     "enable_asr_twopass": true,
-    "input_mode": "tool"
+    "use_twopass_retry": true,
+    "strong_ddc": true,
+    "end_smooth_window_ms": 800,
+    "remove_space_between_han_num": true,
+    "remove_space_between_han_eng": true,
+    "enable_print_chinese": false,
+    "disable_user_words": false,
+    "context": "<base64 session context>"
   }
 }
 ```
+
+`audio_info.format` is `raw` for default builds and `speech_opus` for `-tags
+opus` builds. The `extra` object tunes recognition and output formatting:
+
+| Field | Effect |
+|---|---|
+| `enable_asr_twopass` / `enable_asr_threepass` | enable the second and third recognition passes; the third pass produces the most accurate final text |
+| `use_twopass_retry` | retry the second pass when the first result is low confidence |
+| `strong_ddc` | strengthen the disfluency/text-correction model; the main lever for cleaner, better-corrected output |
+| `end_smooth_window_ms` | VAD end-of-speech smoothing window in milliseconds; affects how completely an utterance is closed before finalizing |
+| `remove_space_between_han_num` / `remove_space_between_han_eng` | drop spaces between Han characters and digits / Latin letters in the output |
+| `enable_print_chinese` | when false, keep digits as Arabic numerals instead of spelling them in Chinese |
+| `disable_user_words` | when false, apply the account's uploaded personal lexicon during recognition (see Personalization) |
+| `cell_compress_rate` | upstream cellular-network compression hint |
+| `context` | base64 session context (see Session Context) |
+
+### Session Context
+
+`extra.context` is a base64-encoded JSON document describing prior input and
+client info, used to bias recognition with conversational context:
+
+```json
+{
+  "chat": [
+    {
+      "type": "user_input",
+      "data": "{\"cursor_position\":9,\"text\":\"prior text\"}",
+      "time": "<unix_millis>",
+      "app_apk_name": "com.android.chrome"
+    }
+  ],
+  "ime_info": {"app_apk_name": "com.android.chrome", "input_type": ""}
+}
+```
+
+`chat` holds up to the last 20 input entries (`asr_input` or `user_input`),
+where each `data` is itself a JSON string carrying the entry `text` and cursor
+position. A continuous-input client fills `chat` from earlier utterances; a
+one-shot transcription has no history, so `voxgate` leaves `chat` empty and
+injects any `--prompt` text as a single `user_input` entry. This is a soft
+context bias, not a hard term boost — strong vocabulary correction comes from
+the personal lexicon below.
+
+## Personalization (Hotwords / Personal Lexicon)
+
+Strong vocabulary correction comes from an account-level personal word list,
+uploaded out of band over HTTPS and then applied during recognition when
+`extra.disable_user_words` is `false`. `voxgate` exposes this through the
+`--hotwords` flag, the `asr.hotwords` config key, and `VOXGATE_ASR_HOTWORDS`.
+
+Flow:
+
+1. **Context token.** `POST https://ime.oceancloudapi.com/api/v1/user/get_config`
+   with body `{"sami_app_key":"<app key>"}` returns `data.sami_token`. This
+   token authenticates the context APIs and is cached in-process.
+2. **Encrypted upload.** `POST https://speech.bytedance.com/api/v3/context/ime/user_words`
+   with `{"user": {...}, "user_words": [{"word": "..."}]}`. The body is sealed
+   with the Wave envelope below; the response, if present, is opened the same way.
+3. **Apply.** Subsequent ASR sessions send `disable_user_words=false`, so the
+   uploaded words bias recognition.
+
+User words are append/accumulate semantics: the server keeps prior words and
+dedups. There is no public "clear lexicon" API — only report/upload. `voxgate`
+caches already-reported words per device (`*.hotwords.json` next to the
+credential file) to skip redundant uploads.
+
+### Wave Encryption Envelope
+
+The context endpoints encrypt request and response bodies:
+
+- A one-time `POST https://keyhub.zijieapi.com/handshake` performs an ECDH key
+  exchange (ephemeral ECDSA P-256 keys) and returns a session ticket.
+- The shared secret is run through HKDF-SHA256 to derive a ChaCha20 key.
+- Each request body is encrypted with ChaCha20 under a fresh 12-byte nonce.
+- Headers carry the envelope: `x-tt-e-b: 1`, `x-tt-e-t: <ticket>`,
+  `x-tt-e-p: <base64 nonce>`. A response with `x-tt-e-p` is decrypted with the
+  same key and the response nonce.
 
 ## Protobuf Schema
 

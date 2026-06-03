@@ -4,7 +4,7 @@ Last local validation in this workspace used:
 
 - Go 1.24.4 local toolchain with `go 1.22` module target
 - system ffmpeg
-- optional system `libopus` 1.3.1 for `-tags opus`
+- optional system `libopus` (1.3+) for `-tags opus`
 - real cached backend credentials
 
 ## Unit And Integration

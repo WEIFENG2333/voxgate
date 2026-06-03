@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/WEIFENG2333/voxgate/internal/paths"
-	"gopkg.in/hraban/opus.v2"
 )
 
 const (
@@ -139,32 +138,19 @@ func (s *Source) Chunks(max time.Duration) []*Source {
 	return chunks
 }
 
-type OpusEncoder struct {
-	enc *opus.Encoder
+type PCMEncoder struct{}
+
+func NewPCMEncoder() *PCMEncoder {
+	return &PCMEncoder{}
 }
 
-func NewOpusEncoder() (*OpusEncoder, error) {
-	enc, err := opus.NewEncoder(SampleRate, Channels, opus.AppAudio)
-	if err != nil {
-		return nil, err
-	}
-	return &OpusEncoder{enc: enc}, nil
-}
-
-func (e *OpusEncoder) EncodePCMFrame(pcm []byte) ([]byte, error) {
+func (e *PCMEncoder) EncodePCMFrame(pcm []byte) ([]byte, error) {
 	if len(pcm) != BytesPerFrame {
 		return nil, fmt.Errorf("pcm frame must be %d bytes, got %d", BytesPerFrame, len(pcm))
 	}
-	samples := make([]int16, len(pcm)/2)
-	for i := range samples {
-		samples[i] = int16(pcm[2*i]) | int16(pcm[2*i+1])<<8
-	}
-	out := make([]byte, 4000)
-	n, err := e.enc.Encode(samples, out)
-	if err != nil {
-		return nil, err
-	}
-	return out[:n], nil
+	out := make([]byte, len(pcm))
+	copy(out, pcm)
+	return out, nil
 }
 
-func (e *OpusEncoder) Close() error { return nil }
+func (e *PCMEncoder) Close() error { return nil }

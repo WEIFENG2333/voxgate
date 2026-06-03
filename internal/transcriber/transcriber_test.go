@@ -49,6 +49,41 @@ func TestStreamChunkDurationCapsAtFallbackDuration(t *testing.T) {
 	}
 }
 
+func TestEncoderSelectsPCM(t *testing.T) {
+	enc, format, err := Runner{Config: Config{AudioFormat: AudioFormatPCM}}.encoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+	if format != asr.AudioFormatRaw {
+		t.Fatalf("format = %q, want %q", format, asr.AudioFormatRaw)
+	}
+	frame, err := enc.EncodePCMFrame(make([]byte, audio.BytesPerFrame))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frame) != audio.BytesPerFrame {
+		t.Fatalf("pcm frame len = %d, want %d", len(frame), audio.BytesPerFrame)
+	}
+}
+
+func TestEncoderAutoReturnsUsableFormat(t *testing.T) {
+	enc, format, err := Runner{Config: Config{AudioFormat: AudioFormatAuto}}.encoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+	if format != asr.AudioFormatRaw && format != asr.AudioFormatSpeechOpus {
+		t.Fatalf("unexpected format %q", format)
+	}
+}
+
+func TestEncoderRejectsUnknownFormat(t *testing.T) {
+	if _, _, err := (Runner{Config: Config{AudioFormat: "flac"}}).encoder(); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestTranscribeChunksFallsBackOnEmptyChunk(t *testing.T) {
 	src := silentSource(120 * time.Second)
 	client := fakeStreamClient{emptyAbove: fallbackChunkDuration}

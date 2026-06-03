@@ -22,6 +22,7 @@ type Config struct {
 		EnableThreePass   bool     `yaml:"enable_three_pass"`
 		EnableTwoPass     bool     `yaml:"enable_two_pass"`
 		UserAgent         string   `yaml:"user_agent"`
+		AudioFormat       string   `yaml:"audio_format"`
 		Hotwords          []string `yaml:"hotwords"`
 	} `yaml:"asr"`
 	Server struct {
@@ -41,6 +42,7 @@ func Default() Config {
 	c.ASR.EnableThreePass = true
 	c.ASR.EnableTwoPass = true
 	c.ASR.UserAgent = asr.DefaultUserAgent
+	c.ASR.AudioFormat = "auto"
 	c.Server.Host = "127.0.0.1"
 	c.Server.Port = 8080
 	c.Server.MaxConcurrency = 4
@@ -70,6 +72,9 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("VOXGATE_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
+	}
+	if v := os.Getenv("VOXGATE_ASR_AUDIO_FORMAT"); v != "" {
+		c.ASR.AudioFormat = v
 	}
 	if v := os.Getenv("VOXGATE_ASR_HOTWORDS"); v != "" {
 		c.ASR.Hotwords = SplitList(v)

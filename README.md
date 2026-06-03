@@ -38,11 +38,14 @@ Runtime dependencies:
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install -y ffmpeg libopus0
+sudo apt-get install -y ffmpeg
 
 # macOS
-brew install ffmpeg opus
+brew install ffmpeg
 ```
+
+Opus is optional. Default builds send raw PCM upstream when Opus support is not
+compiled in; build with `-tags opus` only if you want compressed upstream audio.
 
 ### Windows
 
@@ -340,26 +343,31 @@ Most users should install release binaries. Build from source only if you need t
 Requirements:
 
 - Go 1.22+
-- CGO enabled
 - `ffmpeg`
-- `pkg-config`
-- `libopus` development package
 
 Linux:
 
 ```bash
-sudo apt-get install -y ffmpeg libopus-dev pkg-config
+sudo apt-get install -y ffmpeg
 go install github.com/WEIFENG2333/voxgate/cmd/voxgate@latest
 ```
 
 macOS:
 
 ```bash
-brew install ffmpeg opus pkg-config
+brew install ffmpeg
 go install github.com/WEIFENG2333/voxgate/cmd/voxgate@latest
 ```
 
-Windows source builds require `ffmpeg`, `pkg-config`, a C compiler, and `libopus` through MSYS2 or vcpkg. Most Windows users should prefer the release zip or PowerShell installer.
+To build with Opus compression, install `pkg-config` and the `libopus`
+development package, then pass `-tags opus`.
+
+```bash
+go install -tags opus github.com/WEIFENG2333/voxgate/cmd/voxgate@latest
+```
+
+Windows source builds only require `ffmpeg` for the default PCM path. Most
+Windows users should prefer the release zip or PowerShell installer.
 
 ## Development
 
@@ -384,4 +392,4 @@ Real endpoint probes are under `tests/e2e/` and require network access plus a wo
 - Long-file chunking is serial, not parallel.
 - Subtitle timing is coarse.
 - `/v1/realtime` implements a transcription-focused subset, not the full OpenAI Realtime API.
-- Release binaries still require system `ffmpeg`; Linux/macOS also need system `libopus`.
+- Release binaries still require system `ffmpeg`; Opus is optional.

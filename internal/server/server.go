@@ -31,6 +31,7 @@ type Config struct {
 	EnablePunctuation       bool
 	EnableThreePass         bool
 	EnableTwoPass           bool
+	AudioFormat             string
 	UserAgent               string
 	WebSocketURL            string
 	LogLevel                string
@@ -217,6 +218,7 @@ func (s *Server) transcriptionService() transcription.Service {
 		CredentialPath:    s.Config.CredentialPath,
 		UserAgent:         s.Config.UserAgent,
 		WebSocketURL:      s.Config.WebSocketURL,
+		AudioFormat:       s.Config.AudioFormat,
 		EnablePunctuation: s.Config.EnablePunctuation,
 		EnableThreePass:   s.Config.EnableThreePass,
 		EnableTwoPass:     s.Config.EnableTwoPass,

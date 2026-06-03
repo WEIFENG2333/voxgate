@@ -3,8 +3,8 @@
 Last local validation in this workspace used:
 
 - Go 1.24.4 local toolchain with `go 1.22` module target
-- system `libopus` 1.3.1
-- system ffmpeg 2.4.3
+- system ffmpeg
+- optional system `libopus` 1.3.1 for `-tags opus`
 - real cached backend credentials
 
 ## Unit And Integration
@@ -18,7 +18,7 @@ Passed packages:
 - protobuf byte encoding/decoding
 - response JSON parser
 - upstream utterance final handling
-- Opus frame encoding
+- PCM frame source and optional Opus frame encoding
 - ffmpeg PCM frame source
 - output format timestamps
 - config priority

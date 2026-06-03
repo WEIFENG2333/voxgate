@@ -29,10 +29,13 @@ func doctor(cfg config.Config) int {
 		check("ffmpeg", err)
 	}
 
-	_, err := audio.NewOpusEncoder()
-	check("libopus", err)
+	if _, err := audio.NewOpusEncoder(); err != nil {
+		fmt.Fprintf(os.Stderr, "WARN opus: %v; raw PCM fallback is available\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "OK   opus\n")
+	}
 
-	_, err = asr.LoadCredentials(cfg.CredentialPath)
+	_, err := asr.LoadCredentials(cfg.CredentialPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARN credentials: %v\n", err)
 	} else {

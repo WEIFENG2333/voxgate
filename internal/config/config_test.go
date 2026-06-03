@@ -18,11 +18,12 @@ func TestLoadPriorityEnvOverridesFile(t *testing.T) {
 	t.Setenv("VOXGATE_SERVER_MAX_CONCURRENCY", "9")
 	t.Setenv("VOXGATE_SERVER_REQUEST_TIMEOUT", "90s")
 	t.Setenv("VOXGATE_ASR_HOTWORDS", " Claude Code, Anthropic ,,VoxGate ")
+	t.Setenv("VOXGATE_ASR_AUDIO_FORMAT", "pcm")
 	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.CredentialPath != "env.json" || c.Server.Port != 7777 || c.Server.MaxConcurrency != 9 || c.Server.RequestTimeout != "90s" {
+	if c.CredentialPath != "env.json" || c.Server.Port != 7777 || c.Server.MaxConcurrency != 9 || c.Server.RequestTimeout != "90s" || c.ASR.AudioFormat != "pcm" {
 		t.Fatalf("bad config: %+v", c)
 	}
 	wantHotwords := []string{"Claude Code", "Anthropic", "VoxGate"}

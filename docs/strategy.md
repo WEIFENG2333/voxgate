@@ -6,7 +6,8 @@ The backend behaves like an input-method ASR service, not a general long-form ba
 
 - Device bootstrap and token retrieval are real and repeatable.
 - WebSocket protobuf field numbers `2,3,5,6,7,8,9` are required.
-- Audio must be 16 kHz mono PCM encoded to 20 ms Opus frames.
+- Audio must be 16 kHz mono PCM split into 20 ms frames. Default builds send
+  raw PCM; `-tags opus` builds can send Opus-compressed frames.
 - `StartTask` and `StartSession` are separate protobuf round trips.
 - Recognition JSON has interim, definite, and final variants.
 - VAD text can reset between utterance segments; previous text must be preserved.
@@ -25,7 +26,7 @@ Based on local probes, a single session handles short utterances and file inputs
 | HTTP non-stream | same chunking policy as CLI |
 | HTTP stream | single session for now; long-stream chunked SSE is not marked stable |
 
-The chunker is currently time based: after ffmpeg normalization to 16 kHz mono PCM, it slices by PCM byte offset and aligns each boundary to a 20 ms Opus frame. It is not silence-aware, does not run VAD before splitting, and does not add overlap.
+The chunker is currently time based: after ffmpeg normalization to 16 kHz mono PCM, it slices by PCM byte offset and aligns each boundary to a 20 ms frame. It is not silence-aware, does not run VAD before splitting, and does not add overlap.
 
 Chunked file transcription is serial. The client opens one WebSocket session for chunk 0, waits for its final result, then opens the next WebSocket session for chunk 1. Chunks are not sent concurrently, and a multi-chunk file is not kept inside one long WebSocket session. This keeps ordering, retry handling, and backend throttling behavior predictable.
 

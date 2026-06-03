@@ -24,6 +24,7 @@ type ClientConfig struct {
 	CredentialPath string
 	UserAgent      string
 	WebSocketURL   string
+	AudioFormat    string
 	HTTP           *http.Client
 	Dialer         *websocket.Dialer
 	TraceWriter    io.Writer
@@ -157,8 +158,12 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	if resp.MessageType == MessageTaskFailed {
 		return "", true, fmt.Errorf("StartTask failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
+	audioFormat := c.Config.AudioFormat
+	if audioFormat == "" {
+		audioFormat = AudioFormatSpeechOpus
+	}
 	sessionPayload, _ := json.Marshal(map[string]any{
-		"audio_info":              map[string]any{"channel": UpstreamChannels, "format": AudioFormatSpeechOpus, "sample_rate": UpstreamSampleRate},
+		"audio_info":              map[string]any{"channel": UpstreamChannels, "format": audioFormat, "sample_rate": UpstreamSampleRate},
 		"enable_punctuation":      opts.EnablePunctuation,
 		"enable_speech_rejection": false,
 		"extra": map[string]any{

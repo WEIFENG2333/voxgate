@@ -58,7 +58,7 @@ Session JSON:
 
 ```json
 {
-  "audio_info": {"channel": 1, "format": "speech_opus", "sample_rate": 16000},
+  "audio_info": {"channel": 1, "format": "raw", "sample_rate": 16000},
   "enable_punctuation": true,
   "enable_speech_rejection": false,
   "extra": {
@@ -84,7 +84,7 @@ Request fields:
 | 3 | string | service_name |
 | 5 | string | method_name |
 | 6 | string | JSON payload |
-| 7 | bytes | Opus audio data |
+| 7 | bytes | audio data (`raw` PCM by default, Opus when built with `-tags opus`) |
 | 8 | string | request_id |
 | 9 | enum/int32 | frame_state |
 
@@ -115,7 +115,11 @@ Input is normalized to 16 kHz mono signed 16-bit little-endian PCM through ffmpe
 - 320 samples
 - 640 bytes
 
-Each frame is Opus encoded with application `audio`, wrapped in `TaskRequest`, and sent as a binary WebSocket message. The final marker is a last frame with frame_state `9`, followed by `FinishSession`.
+Each frame is wrapped in `TaskRequest` and sent as a binary WebSocket message.
+Default builds send the 20 ms PCM frame directly and declare
+`audio_info.format=raw`. Builds compiled with `-tags opus` may send Opus frames
+and declare `audio_info.format=speech_opus`. The final marker is a last frame
+with frame_state `9`, followed by `FinishSession`.
 
 ## Observed Runtime Limits
 
@@ -124,7 +128,7 @@ These are empirical findings from local probes against the real endpoint, not gu
 | Probe | Result | Implication |
 |---|---|---|
 | Device registration + settings token | succeeds | automatic credential bootstrap is viable |
-| 4.2 s Chinese WAV | succeeds, returns final text | basic protobuf/Opus/WS flow is correct |
+| 4.2 s Chinese WAV | succeeds, returns final text | basic protobuf/audio/WS flow is correct |
 | 60 s Chinese WAV, sent as fast as possible | succeeds, returns multiple VAD segments | file-mode faster-than-realtime upload can work for moderate lengths |
 | 60 s Chinese WAV, realtime paced | succeeds in about 63 s, same output length as fast mode | realtime pacing is not required for moderate file chunks |
 | 90/120/180/300/480 s Chinese WAV, one WS session | succeeds | the practical single-session limit is higher than one minute |

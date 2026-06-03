@@ -16,6 +16,10 @@ const (
 	DefaultChunkDuration      = 300 * time.Second
 	DefaultLongAudioThreshold = DefaultChunkDuration
 	fallbackChunkDuration     = 60 * time.Second
+
+	AudioFormatAuto = "auto"
+	AudioFormatOpus = "opus"
+	AudioFormatPCM  = "pcm"
 )
 
 var ErrEmptyTranscript = errors.New("no transcript text returned")
@@ -24,6 +28,7 @@ type Config struct {
 	CredentialPath string
 	UserAgent      string
 	WebSocketURL   string
+	AudioFormat    string
 	ChunkDuration  time.Duration
 	ChunkThreshold time.Duration
 	TraceWriter    io.Writer
@@ -34,12 +39,7 @@ type Runner struct {
 }
 
 func (r Runner) Transcribe(ctx context.Context, src *audio.Source, opts asr.Options, allowChunking bool) (asr.Result, error) {
-	client := asr.Client{Config: asr.ClientConfig{
-		CredentialPath: r.Config.CredentialPath,
-		UserAgent:      r.Config.UserAgent,
-		WebSocketURL:   r.Config.WebSocketURL,
-		TraceWriter:    r.Config.TraceWriter,
-	}}
+	client := asr.Client{Config: r.clientConfig("")}
 	if allowChunking && src.Duration() > r.threshold() {
 		return r.transcribeChunks(ctx, client, src.Chunks(r.chunkDuration()), opts)
 	}
@@ -51,16 +51,11 @@ func (r Runner) Stream(ctx context.Context, src *audio.Source, opts asr.Options)
 }
 
 func (r Runner) StreamFrames(ctx context.Context, src asr.PCMFrameSource, opts asr.Options) (<-chan asr.Event, error) {
-	enc, err := audio.NewOpusEncoder()
+	enc, audioFormat, err := r.encoder()
 	if err != nil {
 		return nil, err
 	}
-	client := asr.Client{Config: asr.ClientConfig{
-		CredentialPath: r.Config.CredentialPath,
-		UserAgent:      r.Config.UserAgent,
-		WebSocketURL:   r.Config.WebSocketURL,
-		TraceWriter:    r.Config.TraceWriter,
-	}}
+	client := asr.Client{Config: r.clientConfig(audioFormat)}
 	return client.Transcribe(ctx, src, enc, opts)
 }
 
@@ -68,12 +63,7 @@ func (r Runner) StreamWithChunking(ctx context.Context, src *audio.Source, opts 
 	if !allowChunking || src.Duration() <= r.threshold() {
 		return r.Stream(ctx, src, opts)
 	}
-	client := asr.Client{Config: asr.ClientConfig{
-		CredentialPath: r.Config.CredentialPath,
-		UserAgent:      r.Config.UserAgent,
-		WebSocketURL:   r.Config.WebSocketURL,
-		TraceWriter:    r.Config.TraceWriter,
-	}}
+	client := asr.Client{Config: r.clientConfig("")}
 	out := make(chan asr.Event, 32)
 	go r.streamChunks(ctx, out, client, src.Chunks(r.streamChunkDuration()), opts)
 	return out, nil
@@ -90,12 +80,12 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 	for _, chunk := range chunks {
 		// Long-file streaming uses serial chunks to stay within upstream session
 		// limits while keeping timestamps monotonic for downstream consumers.
-		enc, err := audio.NewOpusEncoder()
+		enc, audioFormat, err := r.encoder()
 		if err != nil {
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "encoder_error", Message: err.Error()}}
 			return
 		}
-		events, err := client.Transcribe(ctx, chunk, enc, opts)
+		events, err := transcribeWithFormat(ctx, client, chunk, enc, audioFormat, opts)
 		if err != nil {
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "asr_error", Message: err.Error()}}
 			return
@@ -188,12 +178,8 @@ func shouldFallbackChunk(err error, duration time.Duration) bool {
 		strings.Contains(message, "stream is done")
 }
 
-func transcribeOne(ctx context.Context, client streamClient, src *audio.Source, opts asr.Options) (asr.Result, error) {
-	enc, err := audio.NewOpusEncoder()
-	if err != nil {
-		return asr.Result{}, err
-	}
-	events, err := client.Transcribe(ctx, src, enc, opts)
+func transcribeOneWithFormat(ctx context.Context, client streamClient, src *audio.Source, enc asr.PCMFrameEncoder, audioFormat string, opts asr.Options) (asr.Result, error) {
+	events, err := transcribeWithFormat(ctx, client, src, enc, audioFormat, opts)
 	if err != nil {
 		return asr.Result{}, err
 	}
@@ -201,7 +187,11 @@ func transcribeOne(ctx context.Context, client streamClient, src *audio.Source, 
 }
 
 func (r Runner) transcribeOne(ctx context.Context, client streamClient, src *audio.Source, opts asr.Options) (asr.Result, error) {
-	res, err := transcribeOne(ctx, client, src, opts)
+	enc, audioFormat, encErr := r.encoder()
+	if encErr != nil {
+		return asr.Result{}, encErr
+	}
+	res, err := transcribeOneWithFormat(ctx, client, src, enc, audioFormat, opts)
 	if !isCredentialRecoverable(err) {
 		return res, err
 	}
@@ -209,7 +199,64 @@ func (r Runner) transcribeOne(ctx context.Context, client streamClient, src *aud
 	if reissueErr != nil {
 		return res, err
 	}
-	return transcribeOne(ctx, client, src.Clone(), opts)
+	enc, audioFormat, encErr = r.encoder()
+	if encErr != nil {
+		return asr.Result{}, encErr
+	}
+	return transcribeOneWithFormat(ctx, client, src.Clone(), enc, audioFormat, opts)
+}
+
+func (r Runner) clientConfig(audioFormat string) asr.ClientConfig {
+	return asr.ClientConfig{
+		CredentialPath: r.Config.CredentialPath,
+		UserAgent:      r.Config.UserAgent,
+		WebSocketURL:   r.Config.WebSocketURL,
+		AudioFormat:    audioFormat,
+		TraceWriter:    r.Config.TraceWriter,
+	}
+}
+
+func (r Runner) encoder() (asr.PCMFrameEncoder, string, error) {
+	format := normalizedAudioFormat(r.Config.AudioFormat)
+	switch format {
+	case AudioFormatPCM:
+		return audio.NewPCMEncoder(), asr.AudioFormatRaw, nil
+	case AudioFormatOpus:
+		enc, err := audio.NewOpusEncoder()
+		if err != nil {
+			return nil, "", err
+		}
+		return enc, asr.AudioFormatSpeechOpus, nil
+	case AudioFormatAuto:
+		enc, err := audio.NewOpusEncoder()
+		if err == nil {
+			return enc, asr.AudioFormatSpeechOpus, nil
+		}
+		return audio.NewPCMEncoder(), asr.AudioFormatRaw, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported ASR audio format %q; use auto, opus, or pcm", r.Config.AudioFormat)
+	}
+}
+
+func normalizedAudioFormat(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", AudioFormatAuto:
+		return AudioFormatAuto
+	case AudioFormatOpus, asr.AudioFormatSpeechOpus:
+		return AudioFormatOpus
+	case AudioFormatPCM, "pcm16", asr.AudioFormatRaw:
+		return AudioFormatPCM
+	default:
+		return format
+	}
+}
+
+func transcribeWithFormat(ctx context.Context, client streamClient, src asr.PCMFrameSource, enc asr.PCMFrameEncoder, audioFormat string, opts asr.Options) (<-chan asr.Event, error) {
+	if c, ok := client.(asr.Client); ok {
+		c.Config.AudioFormat = audioFormat
+		return c.Transcribe(ctx, src, enc, opts)
+	}
+	return client.Transcribe(ctx, src, enc, opts)
 }
 
 func isCredentialRecoverable(err error) bool {

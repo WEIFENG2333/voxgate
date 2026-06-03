@@ -342,6 +342,62 @@ func mustParseResult(t *testing.T, s string) ParsedResult {
 	return got
 }
 
+func TestClientStartSessionUsesConfiguredAudioFormat(t *testing.T) {
+	gotFormat := make(chan string, 1)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, data, _ := conn.ReadMessage()
+		payload, _ := parseTestRequestPayload(data)
+		var session struct {
+			AudioInfo struct {
+				Format string `json:"format"`
+			} `json:"audio_info"`
+		}
+		_ = json.Unmarshal([]byte(payload), &session)
+		gotFormat <- session.AudioInfo.Format
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			method, _ := parseTestRequestMethod(data)
+			if method == "FinishSession" {
+				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "完成", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := SaveCredentials(credPath, Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Config: ClientConfig{CredentialPath: credPath, WebSocketURL: "ws" + strings.TrimPrefix(srv.URL, "http"), AudioFormat: AudioFormatRaw}}
+	events, err := client.Transcribe(context.Background(), &fakeSource{frames: [][]byte{{0}}}, fakeEncoder{}, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ev := range events {
+		if ev.Type == EventError {
+			t.Fatalf("event error: %+v", ev.Error)
+		}
+	}
+	if format := <-gotFormat; format != AudioFormatRaw {
+		t.Fatalf("StartSession audio format = %q, want %q", format, AudioFormatRaw)
+	}
+}
+
 func TestClientTraceRecordsRawWebSocketFrames(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -633,6 +689,30 @@ func parseTestRequestMethod(data []byte) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func parseTestRequestPayload(data []byte) (string, error) {
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] == 0x32 {
+			l, n := readTestVarint(data[i+1:])
+			if n > 0 && i+1+n+int(l) <= len(data) {
+				start := i + 1 + n
+				return string(data[start : start+int(l)]), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func readTestVarint(data []byte) (uint64, int) {
+	var v uint64
+	for i, b := range data {
+		v |= uint64(b&0x7f) << (7 * i)
+		if b < 0x80 {
+			return v, i + 1
+		}
+	}
+	return 0, 0
 }
 
 type tokenRoundTripper struct{}

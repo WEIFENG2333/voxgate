@@ -20,6 +20,7 @@ type Config struct {
 	CredentialPath    string
 	UserAgent         string
 	WebSocketURL      string
+	AudioFormat       string
 	EnablePunctuation bool
 	EnableThreePass   bool
 	EnableTwoPass     bool
@@ -59,6 +60,7 @@ func FromAppConfig(cfg config.Config) Service {
 	return New(Config{
 		CredentialPath:    cfg.CredentialPath,
 		UserAgent:         cfg.ASR.UserAgent,
+		AudioFormat:       cfg.ASR.AudioFormat,
 		EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass:   cfg.ASR.EnableThreePass,
 		EnableTwoPass:     cfg.ASR.EnableTwoPass,
@@ -248,6 +250,7 @@ func (s Service) Runner() transcriber.Runner {
 		CredentialPath: s.Config.CredentialPath,
 		UserAgent:      s.Config.UserAgent,
 		WebSocketURL:   s.Config.WebSocketURL,
+		AudioFormat:    s.Config.AudioFormat,
 		ChunkDuration:  s.Config.ChunkDuration,
 		TraceWriter:    s.Config.TraceWriter,
 	}}

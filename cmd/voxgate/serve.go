@@ -48,6 +48,7 @@ func serve(args []string, cfg config.Config, g globalFlags) int {
 		EnablePunctuation: cfg.ASR.EnablePunctuation,
 		EnableThreePass:   cfg.ASR.EnableThreePass,
 		EnableTwoPass:     cfg.ASR.EnableTwoPass,
+		AudioFormat:       cfg.ASR.AudioFormat,
 		UserAgent:         cfg.ASR.UserAgent,
 		LogLevel:          cfg.LogLevel,
 		JSONLogs:          g.jsonLogs,

@@ -59,7 +59,7 @@ type fakeUpstream struct {
 func main() {
 	bin := flag.String("bin", "bin/voxgate", "voxgate binary")
 	audioPath := flag.String("audio", "tests/audio/zh_5s.wav", "speech sample")
-	fixturePath := flag.String("fixture", "tests/e2e/fixtures/doubao_ime_zh_5s.jsonl", "upstream response fixture")
+	fixturePath := flag.String("fixture", "tests/e2e/fixtures/upstream_ime_zh_5s.jsonl", "upstream response fixture")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

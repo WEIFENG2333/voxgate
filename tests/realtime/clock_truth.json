@@ -1,0 +1,100 @@
+{
+  "voice": "Tingting",
+  "gap_s": 0.08,
+  "lead_s": 0.3,
+  "sample_rate": 16000,
+  "total_ms": 5737,
+  "text": "今天天气很好我们一起去公园散步",
+  "chars": [
+    {
+      "index": 0,
+      "char": "今",
+      "start_ms": 300,
+      "end_ms": 600
+    },
+    {
+      "index": 1,
+      "char": "天",
+      "start_ms": 680,
+      "end_ms": 1038
+    },
+    {
+      "index": 2,
+      "char": "天",
+      "start_ms": 1118,
+      "end_ms": 1475
+    },
+    {
+      "index": 3,
+      "char": "气",
+      "start_ms": 1555,
+      "end_ms": 1848
+    },
+    {
+      "index": 4,
+      "char": "很",
+      "start_ms": 1928,
+      "end_ms": 2175
+    },
+    {
+      "index": 5,
+      "char": "好",
+      "start_ms": 2255,
+      "end_ms": 2535
+    },
+    {
+      "index": 6,
+      "char": "我",
+      "start_ms": 2615,
+      "end_ms": 2889
+    },
+    {
+      "index": 7,
+      "char": "们",
+      "start_ms": 2969,
+      "end_ms": 3212
+    },
+    {
+      "index": 8,
+      "char": "一",
+      "start_ms": 3292,
+      "end_ms": 3526
+    },
+    {
+      "index": 9,
+      "char": "起",
+      "start_ms": 3606,
+      "end_ms": 3897
+    },
+    {
+      "index": 10,
+      "char": "去",
+      "start_ms": 3977,
+      "end_ms": 4251
+    },
+    {
+      "index": 11,
+      "char": "公",
+      "start_ms": 4331,
+      "end_ms": 4597
+    },
+    {
+      "index": 12,
+      "char": "园",
+      "start_ms": 4677,
+      "end_ms": 5064
+    },
+    {
+      "index": 13,
+      "char": "散",
+      "start_ms": 5144,
+      "end_ms": 5395
+    },
+    {
+      "index": 14,
+      "char": "步",
+      "start_ms": 5475,
+      "end_ms": 5657
+    }
+  ]
+}

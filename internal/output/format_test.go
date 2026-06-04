@@ -37,6 +37,9 @@ func TestFormatValidation(t *testing.T) {
 	if ValidStreamFormat(SRT) || ValidStreamFormat(VTT) {
 		t.Fatal("subtitle formats should not be valid streaming formats")
 	}
+	if ValidStreamFormat(Protocol) || ValidResultFormat(Protocol) {
+		t.Fatal("protocol is a CLI transcribe stream format, not a generic output format")
+	}
 }
 
 func TestFormatTimestamp(t *testing.T) {

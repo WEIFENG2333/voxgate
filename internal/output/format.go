@@ -17,6 +17,7 @@ const (
 	SRT         = "srt"
 	VTT         = "vtt"
 	NDJSON      = "ndjson"
+	Protocol    = "protocol"
 )
 
 func ValidResultFormat(format string) bool {

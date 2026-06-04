@@ -25,8 +25,8 @@ import (
 func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	fs := flag.NewFlagSet("transcribe", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	format := fs.String("format", "", "text|json|verbose_json|srt|vtt|ndjson")
-	fs.StringVar(format, "f", "", "text|json|verbose_json|srt|vtt|ndjson")
+	format := fs.String("format", "", "text|json|verbose_json|srt|vtt|ndjson|protocol")
+	fs.StringVar(format, "f", "", "text|json|verbose_json|srt|vtt|ndjson|protocol")
 	stream := fs.Bool("stream", false, "stream events")
 	language := fs.String("language", "zh", "language hint")
 	fs.StringVar(language, "l", "zh", "language hint")
@@ -64,8 +64,8 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 		chosen = output.DefaultFormat(*stream, stdoutTTY)
 	}
 	if *stream {
-		if !output.ValidStreamFormat(chosen) {
-			printErr("invalid_format", fmt.Errorf("stream format %q is unsupported; use text, json, verbose_json, or ndjson", chosen))
+		if chosen != output.Protocol && !output.ValidStreamFormat(chosen) {
+			printErr("invalid_format", fmt.Errorf("stream format %q is unsupported; use text, json, verbose_json, ndjson, or protocol", chosen))
 			return 2
 		}
 	} else if !output.ValidResultFormat(chosen) {
@@ -106,6 +106,13 @@ func transcribe(args []string, cfg config.Config, g globalFlags) int {
 	}
 	if traceWriter != nil {
 		defer traceWriter.Close()
+	}
+	switch {
+	case chosen == output.Protocol && traceWriter != nil:
+		svc.Config.TraceWriter = asr.NewSynchronizedWriter(io.MultiWriter(traceWriter, asr.NewProtocolTraceWriter(w)))
+	case chosen == output.Protocol:
+		svc.Config.TraceWriter = asr.NewSynchronizedWriter(asr.NewProtocolTraceWriter(w))
+	case traceWriter != nil:
 		svc.Config.TraceWriter = asr.NewSynchronizedWriter(traceWriter)
 	}
 	liveInput := isLiveStdinStream(fs.Arg(0), *inputFormat, *stream)
@@ -248,6 +255,9 @@ func writeStreamEvents(w io.Writer, format string, events <-chan asr.Event, disp
 	if format == output.Text {
 		return writeTextStreamEvents(w, events, display)
 	}
+	if format == output.Protocol {
+		return drainProtocolStreamEvents(events)
+	}
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
@@ -255,6 +265,16 @@ func writeStreamEvents(w io.Writer, format string, events <-chan asr.Event, disp
 		}
 		if err := output.WriteEvent(w, format, ev); err != nil {
 			printErr("format_error", err)
+			return 1
+		}
+	}
+	return 0
+}
+
+func drainProtocolStreamEvents(events <-chan asr.Event) int {
+	for ev := range events {
+		if ev.Type == asr.EventError && ev.Error != nil {
+			printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
 			return 1
 		}
 	}

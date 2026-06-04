@@ -270,7 +270,7 @@ Common `transcribe` options:
 
 | Option | Description |
 |---|---|
-| `--format text|json|verbose_json|srt|vtt|ndjson` | output format |
+| `--format text|json|verbose_json|srt|vtt|ndjson|protocol` | output format; `protocol` is stream-only and prints filtered upstream protocol events |
 | `--output <file>` / `-o <file>` | write output to file |
 | `--stream` | stream incremental output |
 | `--hotwords <words>` | comma-separated personal words to report before transcription |

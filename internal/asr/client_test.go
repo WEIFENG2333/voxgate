@@ -128,7 +128,7 @@ func TestClientStreamsMultipleStableResultsInOneSession(t *testing.T) {
 			done = ev.Text
 		}
 	}
-	want := []string{"第一段。", "第二段。"}
+	want := []string{"第一段。", "第一段。第二段。"}
 	if len(stable) != len(want) {
 		t.Fatalf("stable = %#v, want %#v", stable, want)
 	}
@@ -137,8 +137,8 @@ func TestClientStreamsMultipleStableResultsInOneSession(t *testing.T) {
 			t.Fatalf("stable = %#v, want %#v", stable, want)
 		}
 	}
-	if done != "第二段。" {
-		t.Fatalf("done = %q, want latest snapshot", done)
+	if done != "第一段。第二段。" {
+		t.Fatalf("done = %q, want accumulated transcript across segments", done)
 	}
 	_ = os.Remove(credPath)
 }
@@ -333,6 +333,64 @@ func TestTranscriptStateEmitsUpdateForNonAppendRevision(t *testing.T) {
 	}
 }
 
+func TestTranscriptStateAccumulatesAcrossSegments(t *testing.T) {
+	state := newTranscriptState("req_test")
+	events := make(chan Event, 16)
+	state.emitPartial(events, mustParseResult(t, `{"results":[{"text":"今天天气很好","is_interim":true,"index":0}]}`))
+	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"今天天气很好。","is_interim":false,"is_vad_finished":true,"index":0}]}`), 0)
+	// A new VAD segment resets the upstream snapshot to a per-segment view.
+	firstSegEvents := len(events)
+	state.emitPartial(events, mustParseResult(t, `{"results":[{"text":"我们出去走走","is_interim":true,"index":1}]}`))
+	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"我们出去走走。","is_interim":false,"is_vad_finished":true,"index":1}]}`), 0)
+	close(events)
+
+	if state.text() != "今天天气很好。我们出去走走。" {
+		t.Fatalf("text = %q, want both segments accumulated", state.text())
+	}
+	var evs []Event
+	for ev := range events {
+		evs = append(evs, ev)
+	}
+	// The first event of the new segment must extend the transcript, not reset it.
+	newSeg := evs[firstSegEvents]
+	if newSeg.Type != EventTranscriptDelta || newSeg.Delta != "我们出去走走" {
+		t.Fatalf("new-segment event = %#v, want append delta", newSeg)
+	}
+	if last := evs[len(evs)-1].Snapshot; last != "今天天气很好。我们出去走走。" {
+		t.Fatalf("final snapshot = %q, want full transcript", last)
+	}
+}
+
+func TestTranscriptStateAppliesOverallFinalRevision(t *testing.T) {
+	state := newTranscriptState("req_test")
+	events := make(chan Event, 16)
+	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"今天天气很好。","is_interim":false,"is_vad_finished":true,"index":0}]}`), 0)
+	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"我们出去走走。","is_interim":false,"is_vad_finished":true,"index":1}]}`), 0)
+	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"今天天气很好，我们出去走走吧。","is_interim":false,"is_vad_finished":true,"index":0,"extra":{"nonstream_result":true}}]}`), 0)
+	close(events)
+
+	var updates []string
+	var lastStable string
+	for ev := range events {
+		if ev.Type == EventTranscriptUpdate {
+			updates = append(updates, ev.Snapshot)
+		}
+		if ev.Type == EventSegmentStable {
+			lastStable = ev.Text
+		}
+	}
+	want := "今天天气很好，我们出去走走吧。"
+	if state.text() != want {
+		t.Fatalf("text = %q, want overall revision", state.text())
+	}
+	if len(updates) == 0 || updates[len(updates)-1] != want {
+		t.Fatalf("updates = %#v, want final overall update %q", updates, want)
+	}
+	if lastStable != want {
+		t.Fatalf("last stable = %q, want %q", lastStable, want)
+	}
+}
+
 func mustParseResult(t *testing.T, s string) ParsedResult {
 	t.Helper()
 	got, err := ParseResultJSON(s)
@@ -344,6 +402,8 @@ func mustParseResult(t *testing.T, s string) ParsedResult {
 
 func TestClientStartSessionUsesConfiguredAudioFormat(t *testing.T) {
 	gotFormat := make(chan string, 1)
+	gotStrongDDC := make(chan bool, 1)
+	gotFinalExtra := make(chan map[string]bool, 1)
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -360,17 +420,30 @@ func TestClientStartSessionUsesConfiguredAudioFormat(t *testing.T) {
 			AudioInfo struct {
 				Format string `json:"format"`
 			} `json:"audio_info"`
+			Extra struct {
+				StrongDDC bool `json:"strong_ddc"`
+			} `json:"extra"`
 		}
 		_ = json.Unmarshal([]byte(payload), &session)
 		gotFormat <- session.AudioInfo.Format
+		gotStrongDDC <- session.Extra.StrongDDC
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
+		var lastTaskPayload string
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
 			method, _ := parseTestRequestMethod(data)
+			if method == "TaskRequest" {
+				lastTaskPayload, _ = parseTestRequestPayload(data)
+			}
 			if method == "FinishSession" {
+				var task struct {
+					Extra map[string]bool `json:"extra"`
+				}
+				_ = json.Unmarshal([]byte(lastTaskPayload), &task)
+				gotFinalExtra <- task.Extra
 				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "完成", "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
 				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 				return
@@ -395,6 +468,13 @@ func TestClientStartSessionUsesConfiguredAudioFormat(t *testing.T) {
 	}
 	if format := <-gotFormat; format != AudioFormatRaw {
 		t.Fatalf("StartSession audio format = %q, want %q", format, AudioFormatRaw)
+	}
+	if strongDDC := <-gotStrongDDC; !strongDDC {
+		t.Fatal("StartSession strong_ddc = false, want true")
+	}
+	finalExtra := <-gotFinalExtra
+	if !finalExtra["force_asr_twopass"] || !finalExtra["finish_audio"] {
+		t.Fatalf("final TaskRequest extra = %#v, want force_asr_twopass and finish_audio", finalExtra)
 	}
 }
 

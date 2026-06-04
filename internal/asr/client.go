@@ -300,7 +300,13 @@ func (c Client) sendAudio(ctx context.Context, conn *websocket.Conn, trace *fram
 		if err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"extra": map[string]any{}, "timestamp_ms": timestamp + int64(frameIndex*20)})
+		payload, _ := json.Marshal(map[string]any{
+			"extra": map[string]any{
+				"finish_audio":      true,
+				"force_asr_twopass": true,
+			},
+			"timestamp_ms": timestamp + int64(frameIndex*20),
+		})
 		if err := sendPBTrace(conn, trace, asrproto.Request{ServiceName: ServiceNameASR, MethodName: MethodTaskRequest, Payload: string(payload), AudioData: opusFrame, RequestID: requestID, FrameState: asrproto.FrameStateLast}); err != nil {
 			return err
 		}
@@ -355,7 +361,6 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			continue
 		}
 		if parsed.Kind == ParsedVADStart {
-			state.startUtterance()
 			events <- Event{Type: EventVADStart, RequestID: requestID, TimestampMS: int64(time.Since(start) / time.Millisecond), Results: parsed.Results, Extra: &parsed.Extra, Raw: parsed.Raw}
 			continue
 		}
@@ -370,12 +375,20 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 	}
 }
 
+// transcriptState accumulates the transcript across VAD segments. The backend
+// resets its snapshot to a per-segment view whenever a new segment begins
+// (signalled by a higher result index), so the full transcript is the
+// concatenation of finalized segments plus the current segment's snapshot.
 type transcriptState struct {
-	requestID       string
-	stableSeq       int
-	revision        int
-	displaySnapshot string
-	lastStableText  string
+	requestID  string
+	stableSeq  int
+	revision   int
+	committed  string // finalized segments (those with index < curIndex)
+	curIndex   int
+	curText    string // current segment's latest snapshot
+	started    bool
+	emitted    string // last full snapshot emitted, for delta computation
+	lastStable string // last full snapshot emitted as a stable segment
 }
 
 func newTranscriptState(requestID string) *transcriptState {
@@ -383,48 +396,77 @@ func newTranscriptState(requestID string) *transcriptState {
 }
 
 func (s *transcriptState) hasTranscript() bool {
-	return s.displaySnapshot != "" || s.lastStableText != ""
+	return s.committed != "" || s.curText != ""
 }
 
 func (s *transcriptState) text() string {
-	if s.displaySnapshot != "" {
-		return s.displaySnapshot
-	}
-	return s.lastStableText
-}
-
-func (s *transcriptState) startUtterance() {
-	// VAD is useful as a marker, but upstream may keep revising the same
-	// composing transcript across multiple VAD slices.
+	return s.committed + s.curText
 }
 
 func (s *transcriptState) emitPartial(events chan<- Event, parsed ParsedResult) {
-	s.emitDisplay(events, parsed, 0)
+	s.ingest(events, parsed, 0)
 }
 
 func (s *transcriptState) emitStable(events chan<- Event, parsed ParsedResult, duration float64) {
-	s.emitDisplay(events, parsed, 0)
-	stableSnapshot := displayText(parsed)
-	if stableSnapshot == "" || stableSnapshot == s.lastStableText {
+	full := s.ingest(events, parsed, duration)
+	if full == "" || full == s.lastStable {
 		return
 	}
-	s.lastStableText = stableSnapshot
-	events <- s.stableEvent(parsed, stableSnapshot, duration)
+	s.lastStable = full
+	events <- s.stableEvent(parsed, full, duration)
 }
 
-func (s *transcriptState) emitDisplay(events chan<- Event, parsed ParsedResult, duration float64) {
-	snapshot := displayText(parsed)
-	if snapshot == "" || snapshot == s.displaySnapshot {
-		return
+// ingest folds one parsed result into the running transcript, emits a delta or
+// update event for any change, and returns the full transcript snapshot. A
+// result whose index advances commits the previous segment so nothing spoken
+// before a pause is lost.
+func (s *transcriptState) ingest(events chan<- Event, parsed ParsedResult, duration float64) string {
+	seg := displayText(parsed)
+	if seg == "" {
+		return s.text()
+	}
+	if !s.started {
+		s.started = true
+		s.curIndex = parsed.Index
+	}
+	if s.isFullSnapshot(parsed, seg) {
+		s.committed = ""
+		s.curIndex = parsed.Index
+		s.curText = seg
+		return s.emitText(events, parsed, seg, duration)
+	}
+	if parsed.Index > s.curIndex {
+		s.committed += s.curText
+		s.curIndex = parsed.Index
+		s.curText = ""
+	}
+	s.curText = seg
+	return s.emitText(events, parsed, s.committed+s.curText, duration)
+}
+
+func (s *transcriptState) isFullSnapshot(parsed ParsedResult, text string) bool {
+	if parsed.Snapshot != "" && parsed.Snapshot != parsed.Text {
+		return true
+	}
+	if parsed.Index < s.curIndex {
+		return true
+	}
+	return s.committed != "" && strings.HasPrefix(text, s.committed)
+}
+
+func (s *transcriptState) emitText(events chan<- Event, parsed ParsedResult, full string, duration float64) string {
+	if full == s.emitted {
+		return full
 	}
 	s.revision++
-	delta, appendOnly := textDelta(s.displaySnapshot, snapshot)
-	s.displaySnapshot = snapshot
+	delta, appendOnly := textDelta(s.emitted, full)
+	s.emitted = full
 	if appendOnly {
-		events <- s.event(EventTranscriptDelta, parsed, delta, snapshot, duration)
-		return
+		events <- s.event(EventTranscriptDelta, parsed, delta, full, duration)
+	} else {
+		events <- s.event(EventTranscriptUpdate, parsed, full, full, duration)
 	}
-	events <- s.event(EventTranscriptUpdate, parsed, snapshot, snapshot, duration)
+	return full
 }
 
 func displayText(parsed ParsedResult) string {

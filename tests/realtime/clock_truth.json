@@ -3,8 +3,8 @@
   "gap_s": 0.08,
   "lead_s": 0.3,
   "sample_rate": 16000,
-  "total_ms": 5737,
-  "text": "今天天气很好我们一起去公园散步",
+  "total_ms": 16011,
+  "text": "今天天气真不错，我在想/要不我们一起去公园散步吧。你觉得这个主意怎么样？",
   "chars": [
     {
       "index": 0,
@@ -32,69 +32,171 @@
     },
     {
       "index": 4,
-      "char": "很",
+      "char": "真",
       "start_ms": 1928,
-      "end_ms": 2175
+      "end_ms": 2222
     },
     {
       "index": 5,
-      "char": "好",
-      "start_ms": 2255,
-      "end_ms": 2535
+      "char": "不",
+      "start_ms": 2302,
+      "end_ms": 2485
     },
     {
       "index": 6,
-      "char": "我",
-      "start_ms": 2615,
-      "end_ms": 2889
+      "char": "错",
+      "start_ms": 2565,
+      "end_ms": 2865
     },
     {
       "index": 7,
-      "char": "们",
-      "start_ms": 2969,
-      "end_ms": 3212
+      "char": "我",
+      "start_ms": 3545,
+      "end_ms": 3818
     },
     {
       "index": 8,
-      "char": "一",
-      "start_ms": 3292,
-      "end_ms": 3526
+      "char": "在",
+      "start_ms": 3898,
+      "end_ms": 4124
     },
     {
       "index": 9,
-      "char": "起",
-      "start_ms": 3606,
-      "end_ms": 3897
+      "char": "想",
+      "start_ms": 4204,
+      "end_ms": 4546
     },
     {
       "index": 10,
-      "char": "去",
-      "start_ms": 3977,
-      "end_ms": 4251
+      "char": "要",
+      "start_ms": 6626,
+      "end_ms": 6874
     },
     {
       "index": 11,
-      "char": "公",
-      "start_ms": 4331,
-      "end_ms": 4597
+      "char": "不",
+      "start_ms": 6954,
+      "end_ms": 7136
     },
     {
       "index": 12,
-      "char": "园",
-      "start_ms": 4677,
-      "end_ms": 5064
+      "char": "我",
+      "start_ms": 7216,
+      "end_ms": 7490
     },
     {
       "index": 13,
-      "char": "散",
-      "start_ms": 5144,
-      "end_ms": 5395
+      "char": "们",
+      "start_ms": 7570,
+      "end_ms": 7813
     },
     {
       "index": 14,
+      "char": "一",
+      "start_ms": 7893,
+      "end_ms": 8127
+    },
+    {
+      "index": 15,
+      "char": "起",
+      "start_ms": 8207,
+      "end_ms": 8498
+    },
+    {
+      "index": 16,
+      "char": "去",
+      "start_ms": 8578,
+      "end_ms": 8852
+    },
+    {
+      "index": 17,
+      "char": "公",
+      "start_ms": 8932,
+      "end_ms": 9199
+    },
+    {
+      "index": 18,
+      "char": "园",
+      "start_ms": 9279,
+      "end_ms": 9666
+    },
+    {
+      "index": 19,
+      "char": "散",
+      "start_ms": 9746,
+      "end_ms": 9996
+    },
+    {
+      "index": 20,
       "char": "步",
-      "start_ms": 5475,
-      "end_ms": 5657
+      "start_ms": 10076,
+      "end_ms": 10259
+    },
+    {
+      "index": 21,
+      "char": "吧",
+      "start_ms": 10339,
+      "end_ms": 10554
+    },
+    {
+      "index": 22,
+      "char": "你",
+      "start_ms": 11834,
+      "end_ms": 12078
+    },
+    {
+      "index": 23,
+      "char": "觉",
+      "start_ms": 12158,
+      "end_ms": 12432
+    },
+    {
+      "index": 24,
+      "char": "得",
+      "start_ms": 12512,
+      "end_ms": 12636
+    },
+    {
+      "index": 25,
+      "char": "这",
+      "start_ms": 12716,
+      "end_ms": 12935
+    },
+    {
+      "index": 26,
+      "char": "个",
+      "start_ms": 13015,
+      "end_ms": 13179
+    },
+    {
+      "index": 27,
+      "char": "主",
+      "start_ms": 13259,
+      "end_ms": 13495
+    },
+    {
+      "index": 28,
+      "char": "意",
+      "start_ms": 13575,
+      "end_ms": 13811
+    },
+    {
+      "index": 29,
+      "char": "怎",
+      "start_ms": 13891,
+      "end_ms": 14140
+    },
+    {
+      "index": 30,
+      "char": "么",
+      "start_ms": 14220,
+      "end_ms": 14395
+    },
+    {
+      "index": 31,
+      "char": "样",
+      "start_ms": 14475,
+      "end_ms": 14731
     }
   ]
 }

@@ -39,21 +39,33 @@ def probe_duration(path):
     return float(out)
 
 
+# Punctuation is not spoken; it inserts a natural pause (seconds) instead, so a
+# multi-sentence script gets realistic phrase and sentence breaks.
+PAUSE = {"，": 0.6, "、": 0.4, "；": 0.7, "：": 0.6, "。": 1.2, "！": 1.2,
+         "？": 1.2, " ": 0.8, "/": 2.0}
+
+
 def build(args):
     import tempfile
     chars = list(args.chars)
     workdir = tempfile.mkdtemp(prefix="rtclock-")
-    # 16kHz mono PCM silence used as the inter-character gap.
-    gap_wav = os.path.join(workdir, "gap.wav")
-    run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r={SR}:cl=mono",
-         "-t", str(args.gap), gap_wav])
+
+    def silence(seconds, name):
+        path = os.path.join(workdir, name)
+        run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r={SR}:cl=mono",
+             "-t", str(seconds), path])
+        return path
+
+    gap_wav = silence(args.gap, "gap.wav")
 
     parts, truth, cursor = [], [], args.lead
     if args.lead > 0:
-        parts.append(gap_lead := os.path.join(workdir, "lead.wav"))
-        run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r={SR}:cl=mono",
-             "-t", str(args.lead), gap_lead])
+        parts.append(silence(args.lead, "lead.wav"))
     for i, ch in enumerate(chars):
+        if ch in PAUSE:
+            parts.append(silence(PAUSE[ch], f"p{i}.wav"))
+            cursor += PAUSE[ch]
+            continue
         txt = os.path.join(workdir, f"c{i}.txt")
         aiff = os.path.join(workdir, f"c{i}.aiff")
         raw = os.path.join(workdir, f"c{i}.wav")
@@ -72,7 +84,7 @@ def build(args):
                 "areverse")
         run(["ffmpeg", "-y", "-i", raw, "-af", trim, clip])
         dur = probe_duration(clip)
-        truth.append({"index": i, "char": ch,
+        truth.append({"index": len(truth), "char": ch,
                       "start_ms": round(cursor * 1000),
                       "end_ms": round((cursor + dur) * 1000)})
         parts.append(clip)
@@ -173,6 +185,14 @@ def report(meta, events, args):
         fid = {"mean_abs_start_err_ms": round(sum(errs) / len(errs)),
                "max_abs_start_err_ms": round(max(errs)), "matched_words": len(errs)}
 
+    # Timeline: when each result arrived (wall clock) and the audio position it
+    # covered, so behaviour across pauses is visible.
+    timeline = [{"arr_s": round(e["_arr_s"], 2),
+                 "audio_end_ms": e.get("audio_end_ms"),
+                 "type": e.get("type", "").rsplit(".", 1)[-1],
+                 "snapshot": e.get("snapshot", e.get("text", ""))}
+                for e in transcripts]
+
     first = transcripts[0]["_arr_s"] if transcripts else None
     out = {
         "audio_format": "opus" if args.format == "opus" else "pcm",
@@ -183,8 +203,15 @@ def report(meta, events, args):
         "realtime_lag": lag,
         "timestamp_fidelity": fid,
         "per_char_arrival": per_char,
+        "timeline": timeline,
     }
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    print(f"format={out['audio_format']}  truth={meta['text']!r}")
+    print(f"recognized={final_text!r}")
+    print(f"first_token={out['first_token_arr_s']}s  realtime_lag={lag}  fidelity={fid}")
+    print("timeline (arrival_s | audio_pos_s | snapshot):")
+    for t in timeline:
+        ae = f"{t['audio_end_ms']/1000:.2f}" if t["audio_end_ms"] is not None else " - "
+        print(f"  {t['arr_s']:6.2f} | {ae:>5} | {t['snapshot']}")
     if args.json:
         with open(args.json, "w") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)

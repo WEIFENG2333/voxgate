@@ -42,6 +42,15 @@ type realtimeItem struct {
 	created time.Time
 }
 
+// realtimeItemResult reports how an item's upstream session ended. A non-nil
+// err means the session failed fatally (e.g. StartSession rejected by the
+// upstream concurrency quota), which is terminal for the whole client
+// connection — the connection must not keep spawning replacement items.
+type realtimeItemResult struct {
+	id  string
+	err error
+}
+
 type realtimeReadResult struct {
 	messageType int
 	data        []byte
@@ -79,8 +88,13 @@ func (s *Server) handleRealtimeConn(ctx context.Context, rw *realtimeWriter, rem
 	sessionID := "sess_" + uuid.NewString()
 	itemIndex := 0
 	var current *realtimeItem
+	// connFailed latches once any item's upstream session fails fatally; the
+	// connection then stops creating items and rejects further audio instead of
+	// rolling new sessions that would re-hit the same failure (e.g. a full
+	// shared concurrency quota).
+	connFailed := false
 	readCh := make(chan realtimeReadResult, 1)
-	itemDoneCh := make(chan string, 8)
+	itemResultCh := make(chan realtimeItemResult, 8)
 	go readRealtimeMessages(rw.conn, readCh)
 	start := time.Now()
 	s.log.Info("realtime connection opened", "session_id", sessionID, "remote_addr", remoteAddr)
@@ -93,15 +107,19 @@ func (s *Server) handleRealtimeConn(ctx context.Context, rw *realtimeWriter, rem
 		"session":  realtimeSessionObject(sessionID),
 	})
 	for {
+		// Prioritize item outcomes: latch a fatal upstream failure into
+		// connFailed before any further audio can spawn a replacement session.
+		select {
+		case res := <-itemResultCh:
+			current, connFailed = s.handleRealtimeItemResult(rw, sessionID, current, connFailed, res)
+			continue
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case itemID := <-itemDoneCh:
-			if current != nil && current.id == itemID {
-				s.log.Debug("realtime item completed", "session_id", sessionID, "item_id", itemID)
-				current = nil
-			}
-			continue
+		case res := <-itemResultCh:
+			current, connFailed = s.handleRealtimeItemResult(rw, sessionID, current, connFailed, res)
 		case read := <-readCh:
 			if read.err != nil {
 				s.log.Debug("realtime read ended", "session_id", sessionID, "error", read.err)
@@ -110,9 +128,30 @@ func (s *Server) handleRealtimeConn(ctx context.Context, rw *realtimeWriter, rem
 				}
 				return
 			}
-			current = s.handleRealtimeClientMessage(ctx, rw, read, sessionID, current, &itemIndex, itemDoneCh)
+			current = s.handleRealtimeClientMessage(ctx, rw, read, sessionID, current, &itemIndex, itemResultCh, connFailed)
 		}
 	}
+}
+
+// handleRealtimeItemResult folds an item's outcome into the connection state.
+// A fatal failure latches connFailed and emits a single failed event; the
+// connection then refuses to spawn replacement items.
+func (s *Server) handleRealtimeItemResult(rw *realtimeWriter, sessionID string, current *realtimeItem, connFailed bool, res realtimeItemResult) (*realtimeItem, bool) {
+	if current != nil && current.id == res.id {
+		if res.err != nil {
+			current.source.CloseWrite()
+		}
+		current = nil
+	}
+	if res.err != nil && !connFailed {
+		s.log.Warn("realtime upstream session failed", "session_id", sessionID, "item_id", res.id, "error", res.err)
+		_ = writeRealtimeTranscriptionFailed(rw, res.id, res.err)
+		return current, true
+	}
+	if res.err == nil {
+		s.log.Debug("realtime item completed", "session_id", sessionID, "item_id", res.id)
+	}
+	return current, connFailed
 }
 
 func readRealtimeMessages(conn *websocket.Conn, out chan<- realtimeReadResult) {
@@ -125,7 +164,7 @@ func readRealtimeMessages(conn *websocket.Conn, out chan<- realtimeReadResult) {
 	}
 }
 
-func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWriter, read realtimeReadResult, sessionID string, current *realtimeItem, itemIndex *int, itemDoneCh chan<- string) *realtimeItem {
+func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWriter, read realtimeReadResult, sessionID string, current *realtimeItem, itemIndex *int, itemResultCh chan<- realtimeItemResult, connFailed bool) *realtimeItem {
 	if read.messageType != websocket.TextMessage {
 		s.log.Warn("realtime protocol error", "session_id", sessionID, "code", "unsupported_message_type")
 		_ = writeRealtimeError(rw, "", "invalid_request_error", "only JSON text events are supported", "unsupported_message_type")
@@ -149,12 +188,17 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 		if !ok {
 			return current
 		}
+		if connFailed {
+			// The upstream session failed terminally; do not start another one.
+			_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", "transcription session ended; reconnect to continue", "session_failed")
+			return current
+		}
 		if current != nil && current.started && time.Since(current.created) >= s.Config.RealtimeMaxItemDuration {
 			s.log.Debug("realtime item rolled by age", "session_id", sessionID, "item_id", current.id, "age_ms", time.Since(current.created).Milliseconds())
 			current.source.CloseWrite()
 			current = nil
 		}
-		current = s.ensureRealtimeItem(ctx, rw, current, itemIndex, itemDoneCh)
+		current = s.ensureRealtimeItem(ctx, rw, current, itemIndex, itemResultCh)
 		current.started = true
 		if err := writeRealtimePCM(ctx, current.source, pcm); err != nil {
 			if !isRealtimeAppendRecoverable(err) {
@@ -162,11 +206,13 @@ func (s *Server) handleRealtimeClientMessage(ctx context.Context, rw *realtimeWr
 				_ = writeRealtimeError(rw, ev.EventID, "invalid_request_error", err.Error(), "audio_buffer_closed")
 				return current
 			}
-			// Do not block the client control loop behind a slow upstream item.
-			// Roll forward and let the previous item finish asynchronously.
+			// Do not block the client control loop behind a slow but healthy
+			// upstream item. Roll forward and let the previous item finish
+			// asynchronously. A fatally failed item never reaches here: its
+			// result latches connFailed above before the next append.
 			s.log.Debug("realtime item rolled after append backpressure", "session_id", sessionID, "item_id", current.id, "error", err)
 			current.source.CloseWrite()
-			current = s.ensureRealtimeItem(ctx, rw, nil, itemIndex, itemDoneCh)
+			current = s.ensureRealtimeItem(ctx, rw, nil, itemIndex, itemResultCh)
 			current.started = true
 			if retryErr := writeRealtimePCM(ctx, current.source, pcm); retryErr != nil {
 				s.log.Warn("realtime audio append retry failed", "session_id", sessionID, "item_id", current.id, "error", retryErr)
@@ -228,7 +274,7 @@ func isRealtimeAppendRecoverable(err error) bool {
 	return errors.Is(err, audio.ErrLiveSourceClosed) || errors.Is(err, context.DeadlineExceeded)
 }
 
-func (s *Server) ensureRealtimeItem(ctx context.Context, rw *realtimeWriter, current *realtimeItem, itemIndex *int, itemDoneCh chan<- string) *realtimeItem {
+func (s *Server) ensureRealtimeItem(ctx context.Context, rw *realtimeWriter, current *realtimeItem, itemIndex *int, itemResultCh chan<- realtimeItemResult) *realtimeItem {
 	if current != nil {
 		return current
 	}
@@ -238,14 +284,20 @@ func (s *Server) ensureRealtimeItem(ctx context.Context, rw *realtimeWriter, cur
 	s.log.Debug("realtime item created", "item_id", itemID)
 	// Each item owns one upstream ASR session. The client WebSocket can stay
 	// open while old items finish and new items accept audio.
-	go s.transcribeRealtimeLive(ctx, rw, item.id, item.source, itemDoneCh)
+	go s.transcribeRealtimeLive(ctx, rw, item.id, item.source, itemResultCh)
 	return item
 }
 
-func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter, itemID string, src *audio.LiveSource, itemDoneCh chan<- string) {
+// transcribeRealtimeLive runs one upstream session for an item and forwards its
+// transcription events. It reports the outcome (nil err = completed, non-nil =
+// fatal failure) to itemResultCh; the connection loop owns deciding what a
+// failure means for the connection and emits the single failed event, so this
+// goroutine never writes it directly.
+func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter, itemID string, src *audio.LiveSource, itemResultCh chan<- realtimeItemResult) {
+	var failErr error
 	defer func() {
 		select {
-		case itemDoneCh <- itemID:
+		case itemResultCh <- realtimeItemResult{id: itemID, err: failErr}:
 		default:
 		}
 	}()
@@ -256,7 +308,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 	events, err := svc.StreamFrames(reqCtx, src, opts)
 	if err != nil {
 		s.log.Error("realtime upstream stream failed", "item_id", itemID, "error", err)
-		_ = writeRealtimeTranscriptionFailed(rw, itemID, err)
+		failErr = err
 		return
 	}
 	lastCompletedText := ""
@@ -283,7 +335,7 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 		}
 		if ev.Type == asr.EventError && ev.Error != nil {
 			s.log.Error("realtime upstream event error", "item_id", itemID, "code", ev.Error.Code, "error", ev.Error.Message)
-			_ = writeRealtimeTranscriptionFailed(rw, itemID, fmt.Errorf("%s", ev.Error.Message))
+			failErr = fmt.Errorf("%s", ev.Error.Message)
 		}
 	}
 }

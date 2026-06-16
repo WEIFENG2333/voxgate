@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -634,4 +635,82 @@ func minimalWAV() []byte {
 func minimalPCM() []byte {
 	const samples = 1600
 	return make([]byte, samples*2)
+}
+
+func mockASRSessionFailedServer(t *testing.T) (string, func(), func() int) {
+	t.Helper()
+	var connections int32
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		atomic.AddInt32(&connections, 1)
+		_, _, _ = conn.ReadMessage() // StartTask
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
+		_, _, _ = conn.ReadMessage() // StartSession
+		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{
+			MessageType:   asr.MessageSessionFailed,
+			StatusCode:    asr.StatusConcurrencyQuotaExceeded,
+			StatusMessage: "concurrency quota exceeded: key:original.sami.ASR_test:new,value:5",
+		}))
+	}))
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close, func() int { return int(atomic.LoadInt32(&connections)) }
+}
+
+// A single realtime connection that keeps appending audio while the upstream
+// rejects StartSession (concurrency quota) must surface exactly one failed
+// event and must not fan out into repeated upstream sessions.
+func TestRealtimeUpstreamSessionFailureDoesNotFanOut(t *testing.T) {
+	wsURL, closeWS, connCount := mockASRSessionFailedServer(t)
+	defer closeWS()
+	credPath := filepath.Join(t.TempDir(), "creds.json")
+	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{CredentialPath: credPath, WebSocketURL: wsURL, RequestTimeout: 10 * time.Second})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http")+"/v1/realtime", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	var msg map[string]any
+	if err := conn.ReadJSON(&msg); err != nil { // session.created
+		t.Fatal(err)
+	}
+
+	audio := base64.StdEncoding.EncodeToString(minimalPCM())
+	go func() {
+		for i := 0; i < 10; i++ {
+			if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": audio}); err != nil {
+				return
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+	}()
+
+	failed := 0
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		if err := conn.ReadJSON(&msg); err != nil {
+			break // timeout with no further events: stream has settled
+		}
+		if msg["type"] == "conversation.item.input_audio_transcription.failed" {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("failed events = %d, want exactly 1", failed)
+	}
+	if c := connCount(); c > 2 {
+		t.Fatalf("upstream StartSession attempts = %d, want no fan-out (<=2)", c)
+	}
 }

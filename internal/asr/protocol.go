@@ -21,6 +21,11 @@ const (
 	UpstreamChannels        = 1
 	UpstreamFrameDurationMS = 20
 	UpstreamBytesPerFrame   = UpstreamSampleRate * UpstreamFrameDurationMS / 1000 * 2
+
+	// StatusConcurrencyQuotaExceeded is returned when the shared app-key's
+	// concurrent-session quota is full. Retrying (token refresh / new device)
+	// cannot free a slot, so it is treated as terminal rather than retryable.
+	StatusConcurrencyQuotaExceeded = 40200011
 )
 
 const (

@@ -190,7 +190,10 @@ func (c Client) runWithCreds(ctx context.Context, creds Credentials, requestID s
 	}
 	stats.received(resp, source.Duration())
 	if resp.MessageType == MessageSessionFailed {
-		return "", true, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
+		// A full concurrency quota cannot be cleared by retrying with refreshed
+		// credentials, so do not let run() burn more StartSession attempts on it.
+		retryable := resp.StatusCode != StatusConcurrencyQuotaExceeded
+		return "", retryable, fmt.Errorf("StartSession failed (code=%d): %s", resp.StatusCode, resp.StatusMessage)
 	}
 	events <- Event{Type: EventSessionStarted, RequestID: requestID}
 

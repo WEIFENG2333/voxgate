@@ -84,7 +84,7 @@ opus` builds. The `extra` object tunes recognition and output formatting:
 
 | Field | Effect |
 |---|---|
-| `enable_asr_twopass` / `enable_asr_threepass` | enable the second and third recognition passes; the third pass produces the most accurate final text |
+| `enable_asr_twopass` / `enable_asr_threepass` | enable the second and third recognition passes (internal quality stages). They do not change the event/frame structure; the optional refined `nonstream_result` they can produce is emitted only intermittently by the backend |
 | `use_twopass_retry` | retry the second pass when the first result is low confidence |
 | `strong_ddc` | strengthen the disfluency/text-correction model; the main lever for cleaner, better-corrected output |
 | `remove_space_between_han_num` / `remove_space_between_han_eng` | drop spaces between Han characters and digits / Latin letters in the output |
@@ -276,65 +276,98 @@ Open design questions:
 
 ## Response Parsing
 
-Recognition responses carry JSON in response field 7. Useful shapes:
+Recognition responses carry JSON in response field 7. A frame normally has a
+single `results` entry (`n=1`); this is the common case observed live:
 
 ```json
-{"extra":{"vad_start":true}}
-{"results":[{"text":"今天","is_interim":true}]}
-{"results":[{"text":"今天。","is_interim":false,"is_vad_finished":true}]}
-{"results":[{"text":"今天。","is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}
-{"results":[
-  {"text":"今天。明天","is_interim":true},
-  {"text":"今天。","is_interim":true,"extra":{"nonstream_result":true}},
-  {"text":"明天","start_time":2.1,"is_interim":true}
-]}
+{"results":[{"text":"甚至出现交易几乎停滞的情况","is_interim":true,"index":0}]}
+{"results":[{"text":"甚至出现交易几乎停滞的情况，甚至。","is_interim":false,"is_vad_finished":true,"index":0,
+             "alternatives":[{"words":[{"word":"甚","start_time":0.5,"end_time":0.7}]}]}]}
 ```
 
-Mapping:
+Per-result fields:
 
-- `extra.vad_start=true` -> native `speech.started`
-- the first non-empty `results[]` entry is treated as the full editable display snapshot
-- append-only display changes -> `transcript.text.delta`
-- non-append display revisions -> `transcript.text.update` with the replacement snapshot
-- `extra.nonstream_result=true` or `!is_interim && is_vad_finished` -> `transcript.segment.stable`
-- input source/session end -> `transcript.text.done` with the full immutable transcript
+- `text` — the **segment-local** recognized text (see Utterance Boundaries; it is
+  not a session-wide cumulative string).
+- `is_interim` — `true` while the segment is still composing, `false` when settled.
+- `is_vad_finished` — `true` on the segment's final frame (silence detected).
+- `index` — the VAD segment counter. It is **not a reliable boundary signal**: in
+  long continuous dictation it can stay `0` while the snapshot still resets.
+- `confidence`, `alternatives[].words[]` — per-result confidence and per-character
+  audio timestamps.
 
-## Utterance Boundaries
+Intermittent shapes (the backend emits these only sometimes — do not depend on
+them): `{"extra":{"vad_start":true}}`, a per-result `extra.nonstream_result:true`
+(threepass refinement), and multi-result frames (`n>=2`) where `results[0]` is the
+full display snapshot and the rest are sub-phrases.
 
-The upstream result payload exposes stable recognition phases, but those phases
-are not necessarily permanent commits. In continuous microphone input the
-backend can later revise punctuation or merge a stable phrase with following
-speech. For that reason, `voxgate` treats `transcript.segment.stable` as
-metadata and keeps the authoritative transcript in the full display snapshot.
-Only `transcript.text.done` is immutable.
+Classification → native events:
 
-For `transcript.segment.stable`, `text` and `snapshot` both carry the upstream
-stable full transcript view after applying that result. `voxgate` does not infer
-the newly stable suffix or sentence boundary because the upstream protocol does
-not expose that as an explicit field. Consumers that render subtitle lines
-should derive line breaks at the application layer from `snapshot` and `results`.
+- `extra.vad_start=true` → `speech.started`
+- append-only snapshot growth → `transcript.text.delta` (`delta` = appended text,
+  `snapshot` = full accumulated transcript)
+- non-append revision → `transcript.text.update` (`snapshot` = full accumulated)
+- `!is_interim && is_vad_finished` (or `nonstream_result`) → `transcript.segment.stable`
+- input/session end → `transcript.text.done` (final immutable full transcript)
 
-When one upstream payload contains multiple `results`, those entries are treated
-as alternate views of the recognition state, not as strings to concatenate.
-In observed live traces, `results[0]` is the full display snapshot,
-`results[1]` often repeats the previous stable phrase, and `results[2]` can be
-the current in-progress phrase. Native NDJSON preserves all raw entries in
-verbose metadata and exposes `transcript.text.update` for non-append revisions
-that cannot be represented as OpenAI text deltas.
+## Utterance Boundaries and Accumulation
 
-Example native NDJSON stream for an upstream sequence that mixes cumulative and
-current-phrase results:
+The upstream `text` is **segment-local**, not a session-wide cumulative string.
+When a new utterance begins, the backend **resets** its snapshot to the new
+segment's text; it does not re-send earlier segments (the input-method design
+commits each finished segment to the text field and moves on). Because `index`
+is unreliable, the reset is the real boundary signal.
+
+Therefore **accumulation is the client's job**. `voxgate` keeps the finalized
+prior segments (`committed`) plus the current segment, and exposes the **full
+accumulated transcript** on every streaming event's `snapshot`, on
+`transcript.segment.stable`, and on the final `transcript.text.done`. A consumer
+that just takes the latest `snapshot` (or the `done` text) always has the
+complete transcript. The append-only OpenAI deltas are derived from that.
+
+The reset is visible in a real trace. Transcribing `tests/audio/zh_liaozhai_40s.mp3`,
+the upstream stays at `index=0` the whole time, yet the snapshot head changes
+from `聊…` to `池…` near the end (a new segment), while `voxgate`'s
+`transcript.text.done` still carries the full `聊斋志异第一篇…文颂。` — the early
+segment was committed, not lost.
+
+### Example: one utterance
+
+Real native NDJSON for `tests/audio/zh_5s.wav` (single VAD segment; snapshot grows
+append-only, then the terminal frame settles it):
 
 ```json
-{"type":"speech.started","request_id":"req_...","timestamp_ms":2172}
-{"type":"transcript.text.delta","request_id":"req_...","revision":1,"text":"最近","delta":"最近","snapshot":"最近"}
-{"type":"transcript.text.delta","request_id":"req_...","revision":2,"text":"我","delta":"我","snapshot":"最近我"}
-{"type":"transcript.text.update","request_id":"req_...","revision":3,"text":"最近我在使用 Unsopee 的 CloudCall。","snapshot":"最近我在使用 Unsopee 的 CloudCall。"}
-{"type":"transcript.segment.stable","request_id":"req_...","utterance_id":"seg_000000","text":"最近我在使用 Unsopee 的 CloudCall。","snapshot":"最近我在使用 Unsopee 的 CloudCall。"}
-{"type":"transcript.text.delta","request_id":"req_...","revision":4,"text":"确实","delta":"确实","snapshot":"最近我在使用 Unsopee 的 CloudCall。确实"}
-{"type":"transcript.text.update","request_id":"req_...","revision":5,"text":"最近我在使用 Unsopee 的 CloudCall，确实","snapshot":"最近我在使用 Unsopee 的 CloudCall，确实"}
-{"type":"transcript.text.delta","request_id":"req_...","revision":6,"text":"感觉挺好用的呢。","delta":"感觉挺好用的呢。","snapshot":"最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。"}
-{"type":"transcript.text.done","request_id":"req_...","text":"最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。","duration":9.71}
+{"type":"task.started"}
+{"type":"session.started"}
+{"type":"transcript.text.delta","delta":"甚","snapshot":"甚"}
+{"type":"transcript.text.delta","delta":"至出现","snapshot":"甚至出现"}
+{"type":"transcript.text.delta","delta":"乎停滞","snapshot":"甚至出现交易几乎停滞"}
+{"type":"transcript.text.delta","delta":"，甚至。","snapshot":"甚至出现交易几乎停滞的情况，甚至。"}
+{"type":"transcript.segment.stable","snapshot":"甚至出现交易几乎停滞的情况，甚至。","text":"甚至出现交易几乎停滞的情况，甚至。"}
+{"type":"transcript.text.done","text":"甚至出现交易几乎停滞的情况，甚至。"}
+```
+
+### Example: multiple segments
+
+When a second utterance starts, the upstream snapshot resets to the new segment
+(`要不…`), but `voxgate` prepends the committed first segment, so the `snapshot`
+keeps growing and `done` holds both:
+
+```json
+{"type":"transcript.text.delta","delta":"今天天气真不错，我在想","snapshot":"今天天气真不错，我在想"}
+{"type":"transcript.segment.stable","snapshot":"今天天气真不错，我在想。","text":"今天天气真不错，我在想。"}
+{"type":"transcript.text.delta","delta":"要不我们一起去公园散步吧","snapshot":"今天天气真不错，我在想。要不我们一起去公园散步吧"}
+{"type":"transcript.text.done","text":"今天天气真不错，我在想。要不我们一起去公园散步吧？你觉得这个主意怎么样？"}
+```
+
+If the upstream revises earlier text instead of appending, native NDJSON carries
+the replacement as a `transcript.text.update` (no usable append delta):
+
+```json
+{"type":"transcript.text.delta","delta":"天气不","snapshot":"天气不"}
+{"type":"transcript.text.update","snapshot":"天气很好"}
+{"type":"transcript.text.delta","delta":"。","snapshot":"天气很好。"}
+{"type":"transcript.segment.stable","snapshot":"天气很好。","text":"天气很好。"}
 ```
 
 For `/v1/audio/transcriptions?stream=true`, only the OpenAI-compatible SSE
@@ -354,16 +387,6 @@ event: transcript.text.done
 data: {"type":"transcript.text.done","text":"你好呀。我觉得今天的天气不错。"}
 ```
 
-If upstream revises earlier text instead of appending, native NDJSON carries the
-replacement as a snapshot update:
-
-```json
-{"type":"transcript.text.delta","delta":"天气不","snapshot":"天气不","revision":1}
-{"type":"transcript.text.update","text":"天气很好","snapshot":"天气很好","revision":2}
-{"type":"transcript.text.delta","delta":"。","snapshot":"天气很好。","revision":3}
-{"type":"transcript.segment.stable","text":"天气很好。","snapshot":"天气很好。","utterance_id":"seg_000000","revision":3}
-```
-
 The OpenAI-compatible SSE and Realtime outputs expose only append-only deltas;
 their final `done` / `completed` event is authoritative when a non-append
 revision occurred internally. Realtime may use `transcript.segment.stable` to
@@ -379,9 +402,9 @@ Single-session core flow:
 3. `StartTask`
 4. `StartSession`
 5. Start send goroutine and receive goroutine
-6. Send PCM frames as Opus `TaskRequest`
+6. Send audio as `TaskRequest` frames (raw PCM by default, Opus with `-tags opus`); the last frame carries `force_asr_twopass`/`finish_audio`
 7. Parse response JSON into typed events
-8. Aggregate reset segments
+8. Accumulate segments across snapshot resets (committed segments + current)
 9. Emit OpenAI-compatible terminal output
 
 Long-file batch flow:

@@ -3,158 +3,788 @@
   "gap_s": 0.08,
   "lead_s": 0.3,
   "sample_rate": 16000,
-  "total_ms": 12249,
-  "text": "第一句你好啊。第二句今天天气不错。第三句我们出去走走吧。",
+  "total_ms": 57838,
+  "text": "各位同事大家好，今天的会议主要讨论三个议题。第一，关于第三季度的销售情况，我们整体增长了不少，超出了预期目标。第二，新产品的研发进度，目前已经完成了核心功能的开发，预计下个月进入测试阶段。第三，关于明年的预算规划，市场部希望适当增加投入。会后请大家把各自的意见整理成文档，发到群里，谢谢大家。",
   "chars": [
     {
       "index": 0,
-      "char": "第",
+      "char": "各",
       "start_ms": 300,
-      "end_ms": 493
+      "end_ms": 499
     },
     {
       "index": 1,
-      "char": "一",
-      "start_ms": 573,
-      "end_ms": 807
+      "char": "位",
+      "start_ms": 579,
+      "end_ms": 818
     },
     {
       "index": 2,
-      "char": "句",
-      "start_ms": 887,
-      "end_ms": 1112
+      "char": "同",
+      "start_ms": 898,
+      "end_ms": 1205
     },
     {
       "index": 3,
-      "char": "你",
-      "start_ms": 1192,
-      "end_ms": 1435
+      "char": "事",
+      "start_ms": 1285,
+      "end_ms": 1605
     },
     {
       "index": 4,
-      "char": "好",
-      "start_ms": 1515,
-      "end_ms": 1795
+      "char": "大",
+      "start_ms": 1685,
+      "end_ms": 1906
     },
     {
       "index": 5,
-      "char": "啊",
-      "start_ms": 1875,
-      "end_ms": 2057
+      "char": "家",
+      "start_ms": 1986,
+      "end_ms": 2283
     },
     {
       "index": 6,
-      "char": "第",
-      "start_ms": 3337,
-      "end_ms": 3529
+      "char": "好",
+      "start_ms": 2363,
+      "end_ms": 2643
     },
     {
       "index": 7,
-      "char": "二",
-      "start_ms": 3609,
-      "end_ms": 3877
+      "char": "今",
+      "start_ms": 3323,
+      "end_ms": 3623
     },
     {
       "index": 8,
-      "char": "句",
-      "start_ms": 3957,
-      "end_ms": 4182
+      "char": "天",
+      "start_ms": 3703,
+      "end_ms": 4060
     },
     {
       "index": 9,
-      "char": "今",
-      "start_ms": 4262,
-      "end_ms": 4561
+      "char": "的",
+      "start_ms": 4140,
+      "end_ms": 4265
     },
     {
       "index": 10,
-      "char": "天",
-      "start_ms": 4641,
-      "end_ms": 4999
+      "char": "会",
+      "start_ms": 4345,
+      "end_ms": 4567
     },
     {
       "index": 11,
-      "char": "天",
-      "start_ms": 5079,
-      "end_ms": 5437
+      "char": "议",
+      "start_ms": 4647,
+      "end_ms": 4884
     },
     {
       "index": 12,
-      "char": "气",
-      "start_ms": 5517,
-      "end_ms": 5809
+      "char": "主",
+      "start_ms": 4964,
+      "end_ms": 5199
     },
     {
       "index": 13,
-      "char": "不",
-      "start_ms": 5889,
-      "end_ms": 6072
+      "char": "要",
+      "start_ms": 5279,
+      "end_ms": 5527
     },
     {
       "index": 14,
-      "char": "错",
-      "start_ms": 6152,
-      "end_ms": 6452
+      "char": "讨",
+      "start_ms": 5607,
+      "end_ms": 5863
     },
     {
       "index": 15,
-      "char": "第",
-      "start_ms": 7732,
-      "end_ms": 7925
+      "char": "论",
+      "start_ms": 5943,
+      "end_ms": 6284
     },
     {
       "index": 16,
       "char": "三",
-      "start_ms": 8005,
-      "end_ms": 8283
+      "start_ms": 6364,
+      "end_ms": 6642
     },
     {
       "index": 17,
-      "char": "句",
-      "start_ms": 8363,
-      "end_ms": 8588
+      "char": "个",
+      "start_ms": 6722,
+      "end_ms": 6886
     },
     {
       "index": 18,
-      "char": "我",
-      "start_ms": 8668,
-      "end_ms": 8942
+      "char": "议",
+      "start_ms": 6966,
+      "end_ms": 7203
     },
     {
       "index": 19,
-      "char": "们",
-      "start_ms": 9022,
-      "end_ms": 9265
+      "char": "题",
+      "start_ms": 7283,
+      "end_ms": 7603
     },
     {
       "index": 20,
-      "char": "出",
-      "start_ms": 9345,
-      "end_ms": 9645
+      "char": "第",
+      "start_ms": 8883,
+      "end_ms": 9075
     },
     {
       "index": 21,
-      "char": "去",
-      "start_ms": 9725,
-      "end_ms": 9999
+      "char": "一",
+      "start_ms": 9155,
+      "end_ms": 9389
     },
     {
       "index": 22,
-      "char": "走",
-      "start_ms": 10079,
-      "end_ms": 10336
+      "char": "关",
+      "start_ms": 10069,
+      "end_ms": 10404
     },
     {
       "index": 23,
-      "char": "走",
-      "start_ms": 10416,
-      "end_ms": 10674
+      "char": "于",
+      "start_ms": 10484,
+      "end_ms": 10735
     },
     {
       "index": 24,
-      "char": "吧",
-      "start_ms": 10754,
-      "end_ms": 10969
+      "char": "第",
+      "start_ms": 10815,
+      "end_ms": 11008
+    },
+    {
+      "index": 25,
+      "char": "三",
+      "start_ms": 11088,
+      "end_ms": 11366
+    },
+    {
+      "index": 26,
+      "char": "季",
+      "start_ms": 11446,
+      "end_ms": 11680
+    },
+    {
+      "index": 27,
+      "char": "度",
+      "start_ms": 11760,
+      "end_ms": 11943
+    },
+    {
+      "index": 28,
+      "char": "的",
+      "start_ms": 12023,
+      "end_ms": 12148
+    },
+    {
+      "index": 29,
+      "char": "销",
+      "start_ms": 12228,
+      "end_ms": 12587
+    },
+    {
+      "index": 30,
+      "char": "售",
+      "start_ms": 12667,
+      "end_ms": 13016
+    },
+    {
+      "index": 31,
+      "char": "情",
+      "start_ms": 13096,
+      "end_ms": 13454
+    },
+    {
+      "index": 32,
+      "char": "况",
+      "start_ms": 13534,
+      "end_ms": 13848
+    },
+    {
+      "index": 33,
+      "char": "我",
+      "start_ms": 14528,
+      "end_ms": 14801
+    },
+    {
+      "index": 34,
+      "char": "们",
+      "start_ms": 14881,
+      "end_ms": 15125
+    },
+    {
+      "index": 35,
+      "char": "整",
+      "start_ms": 15205,
+      "end_ms": 15488
+    },
+    {
+      "index": 36,
+      "char": "体",
+      "start_ms": 15568,
+      "end_ms": 15843
+    },
+    {
+      "index": 37,
+      "char": "增",
+      "start_ms": 15923,
+      "end_ms": 16206
+    },
+    {
+      "index": 38,
+      "char": "长",
+      "start_ms": 16286,
+      "end_ms": 16641
+    },
+    {
+      "index": 39,
+      "char": "了",
+      "start_ms": 16721,
+      "end_ms": 16877
+    },
+    {
+      "index": 40,
+      "char": "不",
+      "start_ms": 16957,
+      "end_ms": 17139
+    },
+    {
+      "index": 41,
+      "char": "少",
+      "start_ms": 17219,
+      "end_ms": 17571
+    },
+    {
+      "index": 42,
+      "char": "超",
+      "start_ms": 18251,
+      "end_ms": 18591
+    },
+    {
+      "index": 43,
+      "char": "出",
+      "start_ms": 18671,
+      "end_ms": 18970
+    },
+    {
+      "index": 44,
+      "char": "了",
+      "start_ms": 19050,
+      "end_ms": 19206
+    },
+    {
+      "index": 45,
+      "char": "预",
+      "start_ms": 19286,
+      "end_ms": 19541
+    },
+    {
+      "index": 46,
+      "char": "期",
+      "start_ms": 19621,
+      "end_ms": 19931
+    },
+    {
+      "index": 47,
+      "char": "目",
+      "start_ms": 20011,
+      "end_ms": 20279
+    },
+    {
+      "index": 48,
+      "char": "标",
+      "start_ms": 20359,
+      "end_ms": 20654
+    },
+    {
+      "index": 49,
+      "char": "第",
+      "start_ms": 21934,
+      "end_ms": 22127
+    },
+    {
+      "index": 50,
+      "char": "二",
+      "start_ms": 22207,
+      "end_ms": 22475
+    },
+    {
+      "index": 51,
+      "char": "新",
+      "start_ms": 23155,
+      "end_ms": 23531
+    },
+    {
+      "index": 52,
+      "char": "产",
+      "start_ms": 23611,
+      "end_ms": 23949
+    },
+    {
+      "index": 53,
+      "char": "品",
+      "start_ms": 24029,
+      "end_ms": 24341
+    },
+    {
+      "index": 54,
+      "char": "的",
+      "start_ms": 24421,
+      "end_ms": 24546
+    },
+    {
+      "index": 55,
+      "char": "研",
+      "start_ms": 24626,
+      "end_ms": 24933
+    },
+    {
+      "index": 56,
+      "char": "发",
+      "start_ms": 25013,
+      "end_ms": 25253
+    },
+    {
+      "index": 57,
+      "char": "进",
+      "start_ms": 25333,
+      "end_ms": 25579
+    },
+    {
+      "index": 58,
+      "char": "度",
+      "start_ms": 25659,
+      "end_ms": 25842
+    },
+    {
+      "index": 59,
+      "char": "目",
+      "start_ms": 26522,
+      "end_ms": 26790
+    },
+    {
+      "index": 60,
+      "char": "前",
+      "start_ms": 26870,
+      "end_ms": 27249
+    },
+    {
+      "index": 61,
+      "char": "已",
+      "start_ms": 27329,
+      "end_ms": 27573
+    },
+    {
+      "index": 62,
+      "char": "经",
+      "start_ms": 27653,
+      "end_ms": 27944
+    },
+    {
+      "index": 63,
+      "char": "完",
+      "start_ms": 28024,
+      "end_ms": 28370
+    },
+    {
+      "index": 64,
+      "char": "成",
+      "start_ms": 28450,
+      "end_ms": 28787
+    },
+    {
+      "index": 65,
+      "char": "了",
+      "start_ms": 28867,
+      "end_ms": 29023
+    },
+    {
+      "index": 66,
+      "char": "核",
+      "start_ms": 29103,
+      "end_ms": 29352
+    },
+    {
+      "index": 67,
+      "char": "心",
+      "start_ms": 29432,
+      "end_ms": 29808
+    },
+    {
+      "index": 68,
+      "char": "功",
+      "start_ms": 29888,
+      "end_ms": 30155
+    },
+    {
+      "index": 69,
+      "char": "能",
+      "start_ms": 30235,
+      "end_ms": 30552
+    },
+    {
+      "index": 70,
+      "char": "的",
+      "start_ms": 30632,
+      "end_ms": 30757
+    },
+    {
+      "index": 71,
+      "char": "开",
+      "start_ms": 30837,
+      "end_ms": 31181
+    },
+    {
+      "index": 72,
+      "char": "发",
+      "start_ms": 31261,
+      "end_ms": 31500
+    },
+    {
+      "index": 73,
+      "char": "预",
+      "start_ms": 32180,
+      "end_ms": 32435
+    },
+    {
+      "index": 74,
+      "char": "计",
+      "start_ms": 32515,
+      "end_ms": 32749
+    },
+    {
+      "index": 75,
+      "char": "下",
+      "start_ms": 32829,
+      "end_ms": 33143
+    },
+    {
+      "index": 76,
+      "char": "个",
+      "start_ms": 33223,
+      "end_ms": 33386
+    },
+    {
+      "index": 77,
+      "char": "月",
+      "start_ms": 33466,
+      "end_ms": 33715
+    },
+    {
+      "index": 78,
+      "char": "进",
+      "start_ms": 33795,
+      "end_ms": 34042
+    },
+    {
+      "index": 79,
+      "char": "入",
+      "start_ms": 34122,
+      "end_ms": 34373
+    },
+    {
+      "index": 80,
+      "char": "测",
+      "start_ms": 34453,
+      "end_ms": 34667
+    },
+    {
+      "index": 81,
+      "char": "试",
+      "start_ms": 34747,
+      "end_ms": 35067
+    },
+    {
+      "index": 82,
+      "char": "阶",
+      "start_ms": 35147,
+      "end_ms": 35396
+    },
+    {
+      "index": 83,
+      "char": "段",
+      "start_ms": 35476,
+      "end_ms": 35736
+    },
+    {
+      "index": 84,
+      "char": "第",
+      "start_ms": 37016,
+      "end_ms": 37209
+    },
+    {
+      "index": 85,
+      "char": "三",
+      "start_ms": 37289,
+      "end_ms": 37567
+    },
+    {
+      "index": 86,
+      "char": "关",
+      "start_ms": 38247,
+      "end_ms": 38582
+    },
+    {
+      "index": 87,
+      "char": "于",
+      "start_ms": 38662,
+      "end_ms": 38913
+    },
+    {
+      "index": 88,
+      "char": "明",
+      "start_ms": 38993,
+      "end_ms": 39345
+    },
+    {
+      "index": 89,
+      "char": "年",
+      "start_ms": 39425,
+      "end_ms": 39806
+    },
+    {
+      "index": 90,
+      "char": "的",
+      "start_ms": 39886,
+      "end_ms": 40010
+    },
+    {
+      "index": 91,
+      "char": "预",
+      "start_ms": 40090,
+      "end_ms": 40345
+    },
+    {
+      "index": 92,
+      "char": "算",
+      "start_ms": 40425,
+      "end_ms": 40766
+    },
+    {
+      "index": 93,
+      "char": "规",
+      "start_ms": 40846,
+      "end_ms": 41131
+    },
+    {
+      "index": 94,
+      "char": "划",
+      "start_ms": 41211,
+      "end_ms": 41433
+    },
+    {
+      "index": 95,
+      "char": "市",
+      "start_ms": 42113,
+      "end_ms": 42433
+    },
+    {
+      "index": 96,
+      "char": "场",
+      "start_ms": 42513,
+      "end_ms": 42847
+    },
+    {
+      "index": 97,
+      "char": "部",
+      "start_ms": 42927,
+      "end_ms": 43110
+    },
+    {
+      "index": 98,
+      "char": "希",
+      "start_ms": 43190,
+      "end_ms": 43518
+    },
+    {
+      "index": 99,
+      "char": "望",
+      "start_ms": 43598,
+      "end_ms": 43860
+    },
+    {
+      "index": 100,
+      "char": "适",
+      "start_ms": 43940,
+      "end_ms": 44260
+    },
+    {
+      "index": 101,
+      "char": "当",
+      "start_ms": 44340,
+      "end_ms": 44595
+    },
+    {
+      "index": 102,
+      "char": "增",
+      "start_ms": 44675,
+      "end_ms": 44957
+    },
+    {
+      "index": 103,
+      "char": "加",
+      "start_ms": 45037,
+      "end_ms": 45334
+    },
+    {
+      "index": 104,
+      "char": "投",
+      "start_ms": 45414,
+      "end_ms": 45712
+    },
+    {
+      "index": 105,
+      "char": "入",
+      "start_ms": 45792,
+      "end_ms": 46043
+    },
+    {
+      "index": 106,
+      "char": "会",
+      "start_ms": 47323,
+      "end_ms": 47545
+    },
+    {
+      "index": 107,
+      "char": "后",
+      "start_ms": 47625,
+      "end_ms": 47914
+    },
+    {
+      "index": 108,
+      "char": "请",
+      "start_ms": 47994,
+      "end_ms": 48333
+    },
+    {
+      "index": 109,
+      "char": "大",
+      "start_ms": 48413,
+      "end_ms": 48633
+    },
+    {
+      "index": 110,
+      "char": "家",
+      "start_ms": 48713,
+      "end_ms": 49010
+    },
+    {
+      "index": 111,
+      "char": "把",
+      "start_ms": 49090,
+      "end_ms": 49310
+    },
+    {
+      "index": 112,
+      "char": "各",
+      "start_ms": 49390,
+      "end_ms": 49589
+    },
+    {
+      "index": 113,
+      "char": "自",
+      "start_ms": 49669,
+      "end_ms": 49848
+    },
+    {
+      "index": 114,
+      "char": "的",
+      "start_ms": 49928,
+      "end_ms": 50052
+    },
+    {
+      "index": 115,
+      "char": "意",
+      "start_ms": 50132,
+      "end_ms": 50369
+    },
+    {
+      "index": 116,
+      "char": "见",
+      "start_ms": 50449,
+      "end_ms": 50735
+    },
+    {
+      "index": 117,
+      "char": "整",
+      "start_ms": 50815,
+      "end_ms": 51098
+    },
+    {
+      "index": 118,
+      "char": "理",
+      "start_ms": 51178,
+      "end_ms": 51413
+    },
+    {
+      "index": 119,
+      "char": "成",
+      "start_ms": 51493,
+      "end_ms": 51829
+    },
+    {
+      "index": 120,
+      "char": "文",
+      "start_ms": 51909,
+      "end_ms": 52235
+    },
+    {
+      "index": 121,
+      "char": "档",
+      "start_ms": 52315,
+      "end_ms": 52547
+    },
+    {
+      "index": 122,
+      "char": "发",
+      "start_ms": 53227,
+      "end_ms": 53467
+    },
+    {
+      "index": 123,
+      "char": "到",
+      "start_ms": 53547,
+      "end_ms": 53790
+    },
+    {
+      "index": 124,
+      "char": "群",
+      "start_ms": 53870,
+      "end_ms": 54282
+    },
+    {
+      "index": 125,
+      "char": "里",
+      "start_ms": 54362,
+      "end_ms": 54596
+    },
+    {
+      "index": 126,
+      "char": "谢",
+      "start_ms": 55276,
+      "end_ms": 55538
+    },
+    {
+      "index": 127,
+      "char": "谢",
+      "start_ms": 55618,
+      "end_ms": 55880
+    },
+    {
+      "index": 128,
+      "char": "大",
+      "start_ms": 55960,
+      "end_ms": 56181
+    },
+    {
+      "index": 129,
+      "char": "家",
+      "start_ms": 56261,
+      "end_ms": 56558
     }
   ]
 }

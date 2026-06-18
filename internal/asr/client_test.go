@@ -93,19 +93,26 @@ func TestClientStreamsCumulativeFullText(t *testing.T) {
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
-		// Drain remaining client frames so progressive sends never block.
-		go func() {
-			for {
-				if _, _, err := conn.ReadMessage(); err != nil {
-					return
-				}
+		// Pace sends to received audio frames (one growing snapshot per frame) and
+		// only finish on FinishSession, so the connection is never closed while the
+		// client is still sending (which would break its send pipe).
+		next := 0
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
 			}
-		}()
-		for _, txt := range snapshots {
-			sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": txt, "is_interim": true, "index": 0}}})
+			method, _ := parseTestRequestMethod(data)
+			if method == "FinishSession" {
+				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": final, "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
+				return
+			}
+			if method == "TaskRequest" && next < len(snapshots) {
+				sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": snapshots[next], "is_interim": true, "index": 0}}})
+				next++
+			}
 		}
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": final, "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
-		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 	}))
 	defer srv.Close()
 

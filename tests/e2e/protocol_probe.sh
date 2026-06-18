@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$ROOT/bin/voxgate"
 AUDIO_DIR="$ROOT/tests/audio"
 REPORT="${1:-$ROOT/tests/e2e/protocol_probe.jsonl}"
-SOURCE="${VOXGATE_PROBE_SOURCE:-$AUDIO_DIR/zh_5s.wav}"
+SOURCE="${VOXGATE_PROBE_SOURCE:-$AUDIO_DIR/zh_clean_6s.wav}"
 
 mkdir -p "$AUDIO_DIR" "$(dirname "$REPORT")"
 
@@ -59,7 +59,7 @@ probe() {
   rm -f "$tmp" "$err"
 }
 
-short="$(make_sample zh_5s 5)"
+short="$(make_sample zh_clean_6s 6)"
 medium="$(make_sample zh_60s 60)"
 long="$(make_sample zh_10min 600)"
 

@@ -145,12 +145,12 @@ Both SDK clients were run against local `voxgate serve` with bearer auth:
 python3 tests/e2e/openai_python_client.py \
   --base-url http://127.0.0.1:18082/v1 \
   --api-key test-token \
-  tests/audio/zh_5s.wav
+  tests/audio/zh_clean_6s.wav
 
 (cd tests/e2e/openai-go-client && \
   go run . --base-url http://127.0.0.1:18083/v1 \
   --api-key test-token \
-  ../../../tests/audio/zh_5s.wav)
+  ../../../tests/audio/zh_clean_6s.wav)
 ```
 
 Both returned:

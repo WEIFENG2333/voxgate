@@ -256,8 +256,8 @@ func TestRealtimeTranscriptionEmitsAppendOnlyDeltas(t *testing.T) {
 	t.Fatal("did not receive realtime completed event")
 }
 
-func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
-	wsURL, closeWS := mockASRAutoCompleteServer(t, []string{"第一段", "第二段"})
+func TestRealtimeTranscriptionCompletesEachItemOnCommit(t *testing.T) {
+	wsURL, closeWS := mockASRSequentialServer(t, []string{"第一段", "第二段"})
 	defer closeWS()
 	credPath := filepath.Join(t.TempDir(), "creds.json")
 	if err := asr.SaveCredentials(credPath, asr.Credentials{DeviceID: "1", CDID: "c", Token: "t", TokenUpdatedAtMS: time.Now().UnixMilli()}); err != nil {
@@ -276,7 +276,12 @@ func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
 	_ = conn.ReadJSON(&msg)
 
 	pcm := minimalPCM()
+	// Each commit closes the current item's session, which completes it; the next
+	// append starts a fresh item with the next id.
 	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
 		t.Fatal(err)
 	}
 	first := readRealtimeCompleted(t, conn)
@@ -287,8 +292,11 @@ func TestRealtimeTranscriptionAutoContinuesAfterUpstreamDone(t *testing.T) {
 	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}); err != nil {
 		t.Fatal(err)
 	}
+	if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
+		t.Fatal(err)
+	}
 	second := readRealtimeCompleted(t, conn)
-	if second["item_id"] != "item_000000" || second["transcript"] != "第二段" {
+	if second["item_id"] != "item_000001" || second["transcript"] != "第二段" {
 		t.Fatalf("second completed event = %v", second)
 	}
 }
@@ -505,9 +513,14 @@ func mockASRRevisionServer(t *testing.T, revisions []string, finalText string) (
 	return "ws" + strings.TrimPrefix(srv.URL, "http"), srv.Close
 }
 
-func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func()) {
+// mockASRSequentialServer answers each successive upstream session (one per
+// realtime item) with the next text in the list, finishing the session on
+// FinishSession so the item completes. The counter is shared across connections
+// because each item dials a fresh session.
+func mockASRSequentialServer(t *testing.T, finalTexts []string) (string, func()) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
+	var index atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -515,7 +528,6 @@ func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func(
 			return
 		}
 		defer conn.Close()
-		index := 0
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
 		_, _, _ = conn.ReadMessage()
@@ -526,13 +538,15 @@ func mockASRAutoCompleteServer(t *testing.T, finalTexts []string) (string, func(
 				return
 			}
 			req, _ := parseRequestMethod(data)
-			if req == "TaskRequest" {
-				if index >= len(finalTexts) {
-					index = len(finalTexts) - 1
+			if req == "FinishSession" {
+				i := int(index.Add(1)) - 1
+				if i >= len(finalTexts) {
+					i = len(finalTexts) - 1
 				}
-				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": finalTexts[index], "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
+				payload, _ := json.Marshal(map[string]any{"results": []map[string]any{{"text": finalTexts[i], "is_interim": false, "is_vad_finished": true, "extra": map[string]any{"nonstream_result": true}}}})
 				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{ResultJSON: string(payload)}))
-				index++
+				_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
+				return
 			}
 		}
 	}))

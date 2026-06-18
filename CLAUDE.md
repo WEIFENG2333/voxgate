@@ -47,7 +47,7 @@ internal/config·paths credential paths, flags>env>yaml>defaults
 
 ## Event flow (`asr.Event` → CLI/SSE/Realtime)
 
-`task.started` · `session.started` · `speech.started` (VAD) · `transcript.text.delta` (append-only) · `transcript.text.update` (snapshot revised) · `transcript.segment.stable` (a VAD-finished phase) · `transcript.text.done` (final, immutable). The threepass `nonstream_result` is the most accurate final; the parser prefers it over `vad_finished`.
+Cumulative full-text passthrough of the upstream — **no segments, no boundary guessing**: `task.started` · `session.started` · `speech.started` (VAD) · `transcript.partial` (the whole transcript so far; grows and is revised in place) · `transcript.done` (final full text). The upstream sends the full transcript in every frame (result `r[0]`), so `transcriptState` just forwards the latest snapshot and dedups unchanged repeats. The OpenAI SSE/Realtime endpoints derive append-only deltas from it via `internal/asr/assembler.go`. (The upstream also exposes per-sentence structure — `stream_asr_finish` plus the `r[1]`/`r[2]` split — but we deliberately don't surface it; see `docs/protocol.md`.)
 
 ## Build & test
 

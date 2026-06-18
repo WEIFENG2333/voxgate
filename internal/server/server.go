@@ -232,19 +232,19 @@ func (s *Server) streamSSE(requestID string, w http.ResponseWriter, events <-cha
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
 	doneSent := false
+	// The core stream carries cumulative full text; derive OpenAI's append-only
+	// deltas plus the final full text from it.
+	var asm asr.Assembler
 	for ev := range events {
-		if ev.Type == asr.EventTranscriptDelta {
-			delta := ev.Delta
-			if delta == "" {
-				delta = ev.Text
-			}
-			if delta != "" {
+		if ev.Type == asr.EventTranscriptPartial {
+			if _, delta := asm.Apply(ev); delta != "" {
 				writeSSE(w, "transcript.text.delta", map[string]string{"type": "transcript.text.delta", "delta": delta})
 			}
 		}
 		if ev.Type == asr.EventTranscriptDone {
 			if !doneSent {
-				writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": ev.Text})
+				full, _ := asm.Apply(ev)
+				writeSSE(w, "transcript.text.done", map[string]string{"type": "transcript.text.done", "text": full})
 				doneSent = true
 			}
 		}

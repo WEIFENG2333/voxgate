@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	audioPath := flag.String("audio", "tests/audio/zh_5s.wav", "audio file")
+	audioPath := flag.String("audio", "tests/audio/zh_clean_6s.wav", "audio file")
 	credentialPath := flag.String("credential-path", "", "credential cache path")
 	formats := flag.String("formats", "raw,pcm,wav,aac,acc,opus,speech_opus", "comma-separated StartSession audio_info.format values")
 	wire := flag.String("wire", "pcm", "wire audio encoding: pcm|opus")

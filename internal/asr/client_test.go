@@ -76,8 +76,12 @@ func (s *dynamicDurationSource) Duration() time.Duration {
 
 func (s *dynamicDurationSource) Close() error { return nil }
 
-func TestClientStreamsMultipleStableResultsInOneSession(t *testing.T) {
+func TestClientStreamsCumulativeFullText(t *testing.T) {
 	upgrader := websocket.Upgrader{}
+	// The upstream sends the whole transcript so far in every frame, growing and
+	// revising it in place; the client forwards each snapshot as a partial.
+	snapshots := []string{"今天", "今天天气真不错。", "今天天气真不错。我们"}
+	final := "今天天气真不错，我们一起去公园散步吧。"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -85,22 +89,22 @@ func TestClientStreamsMultipleStableResultsInOneSession(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_, msg, _ := conn.ReadMessage()
-		req, _ := asrproto.UnmarshalResponse(nil)
-		_ = req
-		_ = msg
+		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "TaskStarted", StatusMessage: "OK"}))
 		_, _, _ = conn.ReadMessage()
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionStarted", StatusMessage: "OK"}))
-		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第一段", "is_interim": true, "index": 0}}})
-		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第一段。", "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
-		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第二段", "is_interim": true, "index": 1}}})
-		_, _, _ = conn.ReadMessage()
-		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": "第二段。", "is_interim": false, "is_vad_finished": true, "index": 1, "extra": map[string]any{"nonstream_result": true}}}})
-		_, _, _ = conn.ReadMessage()
+		// Drain remaining client frames so progressive sends never block.
+		go func() {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
+		for _, txt := range snapshots {
+			sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": txt, "is_interim": true, "index": 0}}})
+		}
+		sendResult(t, conn, map[string]any{"results": []map[string]any{{"text": final, "is_interim": false, "is_vad_finished": true, "index": 0, "extra": map[string]any{"nonstream_result": true}}}})
 		_ = conn.WriteMessage(websocket.BinaryMessage, asrproto.MarshalResponse(asrproto.Response{MessageType: "SessionFinished", StatusMessage: "OK"}))
 	}))
 	defer srv.Close()
@@ -115,30 +119,32 @@ func TestClientStreamsMultipleStableResultsInOneSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stable []string
+	var partials []string
 	var done string
 	for ev := range events {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventSegmentStable {
-			stable = append(stable, ev.Text)
+		if ev.Type == EventTranscriptPartial {
+			partials = append(partials, ev.Text)
 		}
 		if ev.Type == EventTranscriptDone {
 			done = ev.Text
 		}
 	}
-	want := []string{"第一段。", "第一段。第二段。"}
-	if len(stable) != len(want) {
-		t.Fatalf("stable = %#v, want %#v", stable, want)
+	// Partials are the distinct snapshots, forwarded verbatim and in order.
+	want := append(append([]string{}, snapshots...), final)
+	if len(partials) != len(want) {
+		t.Fatalf("partials = %#v, want %#v", partials, want)
 	}
 	for i := range want {
-		if stable[i] != want[i] {
-			t.Fatalf("stable = %#v, want %#v", stable, want)
+		if partials[i] != want[i] {
+			t.Fatalf("partials = %#v, want %#v", partials, want)
 		}
 	}
-	if done != "第一段。第二段。" {
-		t.Fatalf("done = %q, want accumulated transcript across segments", done)
+	// done carries the final full text.
+	if done != final {
+		t.Fatalf("done = %q, want %q", done, final)
 	}
 	_ = os.Remove(credPath)
 }
@@ -186,7 +192,7 @@ func TestClientReportsStableDurationAfterAudioIsSent(t *testing.T) {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventSegmentStable {
+		if ev.Type == EventTranscriptDone {
 			doneDuration = ev.Duration
 		}
 	}
@@ -195,199 +201,76 @@ func TestClientReportsStableDurationAfterAudioIsSent(t *testing.T) {
 	}
 }
 
-func TestTranscriptStateNormalizesMultiResultSnapshotsToDeltas(t *testing.T) {
-	state := newTranscriptState("req_test")
+func drainEvents(events chan Event) []Event {
+	close(events)
+	var out []Event
+	for ev := range events {
+		out = append(out, ev)
+	}
+	return out
+}
+
+func TestTranscriptStateEmitsCumulativePartials(t *testing.T) {
+	state := newTranscriptState("req")
 	events := make(chan Event, 16)
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天","is_interim":true,"index":0}]}`))
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天天气","is_interim":true,"index":0}]}`))
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天天气真不错。","is_interim":false,"is_vad_finished":true,"index":0}]}`))
+	got := drainEvents(events)
 
-	firstStable := mustParseResult(t, `{"results":[{"text":"你好呀。","is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}`)
-	state.emitStable(events, firstStable, 2.2)
-
-	secondPartial := mustParseResult(t, `{
-		"results":[
-			{"text":"你好呀。我觉得今天的天气不错","end_time":32.082,"is_interim":true,"index":0},
-			{"text":"我觉得今天的天气不错","start_time":30.062,"end_time":32.082,"is_interim":true,"index":0}
-		]
-	}`)
-	state.emitPartial(events, secondPartial)
-
-	secondStable := mustParseResult(t, `{
-		"results":[
-			{"text":"你好呀。我觉得今天的天气不错。","end_time":33.032,"is_interim":true,"index":0},
-			{"text":"我觉得今天的天气不错。","start_time":17.702,"end_time":33.032,"is_interim":false,"is_vad_finished":true,"index":0,"extra":{"nonstream_result":true}}
-		]
-	}`)
-	state.emitStable(events, secondStable, 33.3)
-
-	duplicateCumulativeStable := mustParseResult(t, `{"results":[{"text":"你好呀，我觉得今天的天气不错。","end_time":43.872,"is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}`)
-	state.emitStable(events, duplicateCumulativeStable, 44.3)
-	close(events)
-
-	var deltas []string
-	var stable []string
-	var stableSnapshots []string
-	for ev := range events {
-		switch ev.Type {
-		case EventTranscriptDelta:
-			deltas = append(deltas, ev.Delta)
-		case EventSegmentStable:
-			stable = append(stable, ev.Text)
-			stableSnapshots = append(stableSnapshots, ev.Snapshot)
-		}
-	}
-	if got := strings.Join(deltas, ""); got != "你好呀。我觉得今天的天气不错。" {
-		t.Fatalf("delta stream = %q", got)
-	}
-	wantStable := []string{"你好呀。", "你好呀。我觉得今天的天气不错。", "你好呀，我觉得今天的天气不错。"}
-	if len(stable) != len(wantStable) {
-		t.Fatalf("stable = %#v, want %#v", stable, wantStable)
-	}
-	for i := range wantStable {
-		if stable[i] != wantStable[i] {
-			t.Fatalf("stable = %#v, want %#v", stable, wantStable)
-		}
-	}
-	wantSnapshots := []string{"你好呀。", "你好呀。我觉得今天的天气不错。", "你好呀，我觉得今天的天气不错。"}
-	for i := range wantSnapshots {
-		if stableSnapshots[i] != wantSnapshots[i] {
-			t.Fatalf("stable snapshots = %#v, want %#v", stableSnapshots, wantSnapshots)
-		}
-	}
-}
-
-func TestTranscriptStateKeepsCumulativeDisplayEditableAcrossStableResults(t *testing.T) {
-	state := newTranscriptState("req_test")
-	events := make(chan Event, 32)
-
-	for _, payload := range []string{
-		`{"results":[{"text":"最近","start_time":0.792,"end_time":1.382,"is_interim":true},{"text":"最近","start_time":0.792,"end_time":1.382,"is_interim":true}]}`,
-		`{"results":[{"text":"最近我","start_time":0.792,"end_time":1.782,"is_interim":true},{"text":"最近我","start_time":0.792,"end_time":1.782,"is_interim":true}]}`,
-		`{"results":[{"text":"最近我在使用 Unsopee 的 CloudCall。","end_time":5.012,"is_interim":true,"extra":{"nonstream_result":true}},{"text":"最近我在使用 Unsopee 的 CloudCall。","end_time":5.012,"is_interim":true,"extra":{"nonstream_result":true}}]}`,
-		`{"results":[{"text":"最近我在使用 Unsopee 的 CloudCall。确实","end_time":5.862004,"is_interim":true},{"text":"最近我在使用 Unsopee 的 CloudCall。","end_time":5.012,"is_interim":true,"extra":{"nonstream_result":true}},{"text":"确实","start_time":5.192,"end_time":5.862004,"is_interim":true}]}`,
-		`{"results":[{"text":"最近我在使用 Unsopee 的 CloudCall，确实","end_time":6.812,"is_interim":true,"extra":{"nonstream_result":true}},{"text":"最近我在使用 Unsopee 的 CloudCall，确实","end_time":6.812,"is_interim":true,"extra":{"nonstream_result":true}}]}`,
-		`{"results":[{"text":"最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。","end_time":9.352,"is_interim":true,"extra":{"nonstream_result":true}},{"text":"最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。","end_time":9.352,"is_interim":true,"extra":{"nonstream_result":true}}]}`,
-	} {
-		parsed := mustParseResult(t, payload)
-		if parsed.Kind == ParsedStable {
-			state.emitStable(events, parsed, 9.7)
-		} else {
-			state.emitPartial(events, parsed)
-		}
-	}
-	close(events)
-
-	var snapshots []string
-	var updates []string
-	for ev := range events {
-		switch ev.Type {
-		case EventTranscriptDelta:
-			snapshots = append(snapshots, ev.Snapshot)
-		case EventTranscriptUpdate:
-			updates = append(updates, ev.Snapshot)
-			snapshots = append(snapshots, ev.Snapshot)
-		}
-	}
-	if got := snapshots[len(snapshots)-1]; got != "最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。" {
-		t.Fatalf("display snapshot = %q", got)
-	}
-	foundCorrection := false
-	for _, update := range updates {
-		if update == "最近我在使用 Unsopee 的 CloudCall，确实" {
-			foundCorrection = true
-		}
-	}
-	if !foundCorrection {
-		t.Fatalf("updates = %#v, want punctuation correction update", updates)
-	}
-	if state.text() != "最近我在使用 Unsopee 的 CloudCall，确实感觉挺好用的呢。" {
-		t.Fatalf("state text = %q", state.text())
-	}
-}
-
-func TestTranscriptStateEmitsUpdateForNonAppendRevision(t *testing.T) {
-	state := newTranscriptState("req_test")
-	events := make(chan Event, 8)
-
-	state.emitPartial(events, mustParseResult(t, `{"results":[{"text":"天气不","is_interim":true}]}`))
-	state.emitPartial(events, mustParseResult(t, `{"results":[{"text":"天气很好","is_interim":true}]}`))
-	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"天气很好。","is_interim":false,"is_vad_finished":true,"extra":{"nonstream_result":true}}]}`), 3)
-	close(events)
-
-	var got []Event
-	for ev := range events {
-		got = append(got, ev)
-	}
-	if len(got) != 4 {
+	// Every frame is forwarded as a cumulative partial; there are no finals.
+	want := []string{"今天", "今天天气", "今天天气真不错。"}
+	if len(got) != len(want) {
 		t.Fatalf("events = %#v", got)
 	}
-	if got[0].Type != EventTranscriptDelta || got[0].Delta != "天气不" {
-		t.Fatalf("first event = %#v, want append delta", got[0])
+	for i, w := range want {
+		if got[i].Type != EventTranscriptPartial || got[i].Text != w {
+			t.Fatalf("event[%d] = %#v, want partial %q", i, got[i], w)
+		}
 	}
-	if got[1].Type != EventTranscriptUpdate || got[1].Snapshot != "天气很好" {
-		t.Fatalf("revision event = %#v, want snapshot update", got[1])
-	}
-	if got[2].Type != EventTranscriptDelta || got[2].Delta != "。" {
-		t.Fatalf("punctuation event = %#v, want append delta", got[2])
-	}
-	if got[3].Type != EventSegmentStable || got[3].Text != "天气很好。" {
-		t.Fatalf("stable event = %#v", got[3])
+	// The latest snapshot is the final full text delivered by done.
+	if state.text() != "今天天气真不错。" {
+		t.Fatalf("tail = %q, want latest snapshot", state.text())
 	}
 }
 
-func TestTranscriptStateAccumulatesAcrossSegments(t *testing.T) {
-	state := newTranscriptState("req_test")
+func TestTranscriptStateForwardsSnapshotsVerbatim(t *testing.T) {
+	state := newTranscriptState("req")
 	events := make(chan Event, 16)
-	state.emitPartial(events, mustParseResult(t, `{"results":[{"text":"今天天气很好","is_interim":true,"index":0}]}`))
-	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"今天天气很好。","is_interim":false,"is_vad_finished":true,"index":0}]}`), 0)
-	// A new VAD segment resets the upstream snapshot to a per-segment view.
-	firstSegEvents := len(events)
-	state.emitPartial(events, mustParseResult(t, `{"results":[{"text":"我们出去走走","is_interim":true,"index":1}]}`))
-	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"我们出去走走。","is_interim":false,"is_vad_finished":true,"index":1}]}`), 0)
-	close(events)
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天天气真不错。","is_interim":false,"is_vad_finished":true,"index":0}]}`))
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天天气真不错。我们出去走走吧。","is_interim":false,"is_vad_finished":true,"index":0}]}`))
+	got := drainEvents(events)
 
-	if state.text() != "今天天气很好。我们出去走走。" {
-		t.Fatalf("text = %q, want both segments accumulated", state.text())
+	// Each snapshot is forwarded verbatim — the client never concatenates.
+	if len(got) != 2 {
+		t.Fatalf("events = %#v, want two partials", got)
 	}
-	var evs []Event
-	for ev := range events {
-		evs = append(evs, ev)
+	if got[0].Text != "今天天气真不错。" || got[1].Text != "今天天气真不错。我们出去走走吧。" {
+		t.Fatalf("texts = %q,%q, want the two snapshots verbatim", got[0].Text, got[1].Text)
 	}
-	// The first event of the new segment must extend the transcript, not reset it.
-	newSeg := evs[firstSegEvents]
-	if newSeg.Type != EventTranscriptDelta || newSeg.Delta != "我们出去走走" {
-		t.Fatalf("new-segment event = %#v, want append delta", newSeg)
-	}
-	if last := evs[len(evs)-1].Snapshot; last != "今天天气很好。我们出去走走。" {
-		t.Fatalf("final snapshot = %q, want full transcript", last)
+	if state.text() != "今天天气真不错。我们出去走走吧。" {
+		t.Fatalf("tail = %q, want latest snapshot", state.text())
 	}
 }
 
-func TestTranscriptStateAppliesOverallFinalRevision(t *testing.T) {
-	state := newTranscriptState("req_test")
-	events := make(chan Event, 16)
-	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"今天天气很好。","is_interim":false,"is_vad_finished":true,"index":0}]}`), 0)
-	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"我们出去走走。","is_interim":false,"is_vad_finished":true,"index":1}]}`), 0)
-	state.emitStable(events, mustParseResult(t, `{"results":[{"text":"今天天气很好，我们出去走走吧。","is_interim":false,"is_vad_finished":true,"index":0,"extra":{"nonstream_result":true}}]}`), 0)
-	close(events)
+func TestTranscriptStateDedupesUnchangedPartials(t *testing.T) {
+	state := newTranscriptState("req")
+	events := make(chan Event, 8)
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天","is_interim":true,"index":0}]}`))
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天","is_interim":true,"index":0}]}`))
+	if got := drainEvents(events); len(got) != 1 {
+		t.Fatalf("events = %#v, want one (duplicate partial suppressed)", got)
+	}
+}
 
-	var updates []string
-	var lastStable string
-	for ev := range events {
-		if ev.Type == EventTranscriptUpdate {
-			updates = append(updates, ev.Snapshot)
-		}
-		if ev.Type == EventSegmentStable {
-			lastStable = ev.Text
-		}
-	}
-	want := "今天天气很好，我们出去走走吧。"
-	if state.text() != want {
-		t.Fatalf("text = %q, want overall revision", state.text())
-	}
-	if len(updates) == 0 || updates[len(updates)-1] != want {
-		t.Fatalf("updates = %#v, want final overall update %q", updates, want)
-	}
-	if lastStable != want {
-		t.Fatalf("last stable = %q, want %q", lastStable, want)
+func TestTranscriptStateDoneTailIsLatestSnapshot(t *testing.T) {
+	state := newTranscriptState("req")
+	events := make(chan Event, 8)
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天天气真不错。","is_interim":false,"is_vad_finished":true,"index":0}]}`))
+	state.emit(events, mustParseResult(t, `{"results":[{"text":"今天天气真不错。还没说完","is_interim":true,"index":0}]}`))
+	drainEvents(events)
+	if state.text() != "今天天气真不错。还没说完" {
+		t.Fatalf("tail = %q, want the latest cumulative snapshot", state.text())
 	}
 }
 
@@ -632,17 +515,17 @@ func TestClientRetriesHandshakeAfterTokenRefreshWithoutConsumingAudio(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	var done string
+	var text string
 	for ev := range events {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
-			done = ev.Text
+		if ev.Type == EventTranscriptDone && ev.Text != "" {
+			text = ev.Text
 		}
 	}
-	if done != "刷新后成功" {
-		t.Fatalf("bad done text: %q", done)
+	if text != "刷新后成功" {
+		t.Fatalf("bad transcript text: %q", text)
 	}
 	if connections.Load() != 2 {
 		t.Fatalf("connections = %d, want 2", connections.Load())
@@ -721,17 +604,17 @@ func TestClientReissuesDeviceAfterRepeatedHandshakeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var done string
+	var text string
 	for ev := range events {
 		if ev.Type == EventError {
 			t.Fatalf("event error: %+v", ev.Error)
 		}
-		if ev.Type == EventTranscriptDone {
-			done = ev.Text
+		if ev.Type == EventTranscriptDone && ev.Text != "" {
+			text = ev.Text
 		}
 	}
-	if done != "重新注册后成功" {
-		t.Fatalf("bad done text: %q", done)
+	if text != "重新注册后成功" {
+		t.Fatalf("bad transcript text: %q", text)
 	}
 	if connections.Load() != 3 {
 		t.Fatalf("connections = %d, want 3", connections.Load())

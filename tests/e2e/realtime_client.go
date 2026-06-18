@@ -22,7 +22,7 @@ import (
 func main() {
 	url := flag.String("url", "ws://127.0.0.1:8080/v1/realtime", "realtime websocket URL")
 	token := flag.String("token", "", "bearer token")
-	audioPath := flag.String("audio", "tests/audio/zh_5s.wav", "audio file")
+	audioPath := flag.String("audio", "tests/audio/zh_clean_6s.wav", "audio file")
 	chunkMS := flag.Int("chunk-ms", 100, "PCM chunk size in milliseconds")
 	realtime := flag.Bool("realtime", false, "sleep between chunks to simulate microphone input")
 	flag.Parse()

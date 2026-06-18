@@ -311,31 +311,50 @@ func (s *Server) transcribeRealtimeLive(ctx context.Context, rw *realtimeWriter,
 		failErr = err
 		return
 	}
+	// The core stream carries cumulative full text; derive OpenAI's append-only
+	// deltas plus the completed transcript from it.
+	var asm asr.Assembler
 	lastCompletedText := ""
+	emitDelta := func(delta string) {
+		if delta == "" {
+			return
+		}
+		_ = writeRealtimeJSON(rw, map[string]any{
+			"type":          "conversation.item.input_audio_transcription.delta",
+			"event_id":      newRealtimeEventID(),
+			"item_id":       itemID,
+			"content_index": 0,
+			"delta":         delta,
+		})
+	}
+	emitCompleted := func(full string) {
+		if full == "" || full == lastCompletedText {
+			return
+		}
+		lastCompletedText = full
+		s.log.Debug("realtime transcription completed", "item_id", itemID, "chars", len(full))
+		_ = writeRealtimeJSON(rw, map[string]any{
+			"type":          "conversation.item.input_audio_transcription.completed",
+			"event_id":      newRealtimeEventID(),
+			"item_id":       itemID,
+			"content_index": 0,
+			"transcript":    full,
+		})
+	}
 	for ev := range events {
-		if ev.Type == asr.EventTranscriptDelta {
-			_ = writeRealtimeJSON(rw, map[string]any{
-				"type":          "conversation.item.input_audio_transcription.delta",
-				"event_id":      newRealtimeEventID(),
-				"item_id":       itemID,
-				"content_index": 0,
-				"delta":         ev.Delta,
-			})
-		}
-		if (ev.Type == asr.EventSegmentStable || ev.Type == asr.EventTranscriptDone) && ev.Text != "" && ev.Text != lastCompletedText {
-			lastCompletedText = ev.Text
-			s.log.Debug("realtime transcription completed", "item_id", itemID, "chars", len(ev.Text))
-			_ = writeRealtimeJSON(rw, map[string]any{
-				"type":          "conversation.item.input_audio_transcription.completed",
-				"event_id":      newRealtimeEventID(),
-				"item_id":       itemID,
-				"content_index": 0,
-				"transcript":    ev.Text,
-			})
-		}
-		if ev.Type == asr.EventError && ev.Error != nil {
-			s.log.Error("realtime upstream event error", "item_id", itemID, "code", ev.Error.Code, "error", ev.Error.Message)
-			failErr = fmt.Errorf("%s", ev.Error.Message)
+		switch ev.Type {
+		case asr.EventTranscriptPartial:
+			_, delta := asm.Apply(ev)
+			emitDelta(delta)
+		case asr.EventTranscriptDone:
+			full, delta := asm.Apply(ev)
+			emitDelta(delta)
+			emitCompleted(full) // final full transcript
+		case asr.EventError:
+			if ev.Error != nil {
+				s.log.Error("realtime upstream event error", "item_id", itemID, "code", ev.Error.Code, "error", ev.Error.Message)
+				failErr = fmt.Errorf("%s", ev.Error.Message)
+			}
 		}
 	}
 }

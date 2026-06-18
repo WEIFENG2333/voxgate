@@ -56,7 +56,7 @@ func main() {
 
 func parseFlags() config {
 	var cfg config
-	flag.StringVar(&cfg.AudioPath, "audio", "tests/audio/zh_5s.wav", "audio file to send")
+	flag.StringVar(&cfg.AudioPath, "audio", "tests/audio/zh_clean_6s.wav", "audio file to send")
 	flag.StringVar(&cfg.CredentialPath, "credential-path", "", "credential cache path")
 	flag.StringVar(&cfg.SessionAudioFormat, "session-audio-format", asr.AudioFormatSpeechOpus, "StartSession audio_info.format")
 	flag.StringVar(&cfg.WireAudioFormat, "wire-audio-format", wireOpus, "TaskRequest audio_data encoding: opus|pcm")

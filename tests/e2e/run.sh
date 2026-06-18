@@ -16,7 +16,7 @@ if [[ ! -f "$SAMPLE" ]]; then
 fi
 
 echo "running deterministic E2E harness with a protocol-faithful mock upstream"
-(cd "$ROOT" && go run ./tests/e2e/harness.go --bin "$BIN" --audio "$AUDIO_DIR/zh_5s.wav")
+(cd "$ROOT" && go run ./tests/e2e/harness.go --bin "$BIN" --audio "$AUDIO_DIR/zh_clean_6s.wav")
 
 echo "running local doctor smoke"
 "$BIN" doctor

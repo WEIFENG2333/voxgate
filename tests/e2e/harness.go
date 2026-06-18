@@ -58,7 +58,7 @@ type fakeUpstream struct {
 
 func main() {
 	bin := flag.String("bin", "bin/voxgate", "voxgate binary")
-	audioPath := flag.String("audio", "tests/audio/zh_5s.wav", "speech sample")
+	audioPath := flag.String("audio", "tests/audio/zh_clean_6s.wav", "speech sample")
 	fixturePath := flag.String("fixture", "tests/e2e/fixtures/upstream_ime_zh_5s.jsonl", "upstream response fixture")
 	flag.Parse()
 
@@ -335,7 +335,7 @@ func runStdinStream(ctx context.Context, bin, configPath, audioPath string) erro
 	if err != nil {
 		return fmt.Errorf("stdin stream: %w\n%s", err, out)
 	}
-	if !strings.Contains(out, `"type":"transcript.text.delta"`) || !strings.Contains(out, `"type":"transcript.segment.stable"`) || !strings.Contains(out, `"type":"transcript.text.done"`) {
+	if !strings.Contains(out, `"type":"transcript.partial"`) || !strings.Contains(out, `"type":"transcript.done"`) {
 		return fmt.Errorf("stdin stream missing expected events:\n%s", out)
 	}
 	return nil
@@ -593,7 +593,7 @@ func assertVTT(out string) error {
 }
 
 func assertNDJSONDone(out string) error {
-	if !strings.Contains(out, `"type":"transcript.text.done"`) || !strings.Contains(out, expectedText) {
+	if !strings.Contains(out, `"type":"transcript.done"`) || !strings.Contains(out, expectedText) {
 		return fmt.Errorf("bad ndjson output: %s", out)
 	}
 	return nil

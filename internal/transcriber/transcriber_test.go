@@ -148,36 +148,54 @@ func TestTranscribeChunksSkipsMinimumEmptyChunk(t *testing.T) {
 	}
 }
 
-func TestStreamChunksAggregatesTranscriptDoneAndSuppressesStable(t *testing.T) {
+func TestStreamChunksMakesCumulativeFullTextAcrossChunks(t *testing.T) {
 	src := silentSource(120 * time.Second)
+	// Each chunk's transcript is chunk-local cumulative full text; the per-chunk
+	// done carries that chunk's final text.
 	client := &scriptedStreamClient{events: [][]asr.Event{
 		{
-			{Type: asr.EventTranscriptDelta, Text: "a"},
-			{Type: asr.EventSegmentStable, Text: "甲"},
-			{Type: asr.EventTranscriptDone, Text: "甲"},
+			{Type: asr.EventTranscriptPartial, Text: "甲"},
+			{Type: asr.EventTranscriptDone, Text: "甲。"},
 		},
 		{
-			{Type: asr.EventSegmentStable, Text: "乙"},
-			{Type: asr.EventSegmentStable, Text: "丙"},
-			{Type: asr.EventTranscriptDone, Text: "乙丙"},
+			{Type: asr.EventTranscriptPartial, Text: "乙"},
+			{Type: asr.EventTranscriptPartial, Text: "乙丙"},
+			{Type: asr.EventTranscriptDone, Text: "乙丙。"},
 		},
 	}}
 	out := make(chan asr.Event, 8)
 
 	Runner{Config: Config{ChunkDuration: 60 * time.Second}}.streamChunks(context.Background(), out, client, src.Chunks(60*time.Second), asr.Options{})
 
+	var partials []string
+	dones := 0
 	var got []asr.Event
 	for ev := range out {
 		got = append(got, ev)
+		if ev.Type == asr.EventTranscriptPartial {
+			partials = append(partials, ev.Text)
+		}
+		if ev.Type == asr.EventTranscriptDone {
+			dones++
+		}
 	}
-	if len(got) != 2 {
-		t.Fatalf("events = %#v, want 2 events", got)
+	// Per-chunk done is suppressed; exactly one done is emitted at the end.
+	if dones != 1 {
+		t.Fatalf("done events = %d, want 1", dones)
 	}
-	if got[0].Type != asr.EventTranscriptDelta || got[0].Text != "a" {
-		t.Fatalf("first event = %#v, want delta a", got[0])
+	// Later chunks are prefixed with the committed text of earlier chunks so the
+	// whole-file partials stay cumulative across the boundary.
+	want := []string{"甲", "甲。乙", "甲。乙丙"}
+	if len(partials) != len(want) {
+		t.Fatalf("partials = %#v, want %#v", partials, want)
 	}
-	if got[1].Type != asr.EventTranscriptDone || got[1].Text != "甲乙丙" {
-		t.Fatalf("last event = %#v, want transcript.text.done", got[1])
+	for i := range want {
+		if partials[i] != want[i] {
+			t.Fatalf("partials = %#v, want %#v", partials, want)
+		}
+	}
+	if last := got[len(got)-1]; last.Type != asr.EventTranscriptDone || last.Text != "甲。乙丙。" || last.Duration != 120 {
+		t.Fatalf("last event = %#v, want done %q with duration 120", last, "甲。乙丙。")
 	}
 }
 

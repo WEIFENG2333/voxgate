@@ -140,13 +140,18 @@ using the same cached device identity. A reporting failure is shown as a warning
 and does not stop transcription. Successfully reported words are cached per
 device, so later runs only report newly added words.
 
-Streaming NDJSON output uses `speech.started` for VAD start,
-`transcript.text.delta` for append-only text deltas,
-`transcript.text.update` when the editable transcript snapshot is revised,
-`transcript.segment.stable` when upstream reports a stable recognition phase,
-and `transcript.text.done` with the immutable full transcript when the input
-source ends. In `transcript.segment.stable`, `text` and `snapshot` both carry
-the upstream stable full transcript view.
+Streaming NDJSON output is cumulative full text. Each line is one event:
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `speech.started` | — | VAD detected the start of speech |
+| `transcript.partial` | `text`, `end` | the whole transcript so far; it grows and may be revised in place (wording and punctuation) as the backend refines it |
+| `transcript.done` | `text`, `duration` | end of stream; `text` is the final full transcript |
+
+`text` is always the full transcript from the beginning — not a fragment. To
+render live output, just overwrite the display with each `transcript.partial`
+and settle on `transcript.done`. To compute append-only deltas, diff each
+partial against the previous one.
 
 ## Live Audio
 

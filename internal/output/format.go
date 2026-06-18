@@ -74,12 +74,9 @@ func WriteEvent(w io.Writer, format string, event asr.Event) error {
 	case NDJSON, JSON, VerboseJSON:
 		return json.NewEncoder(w).Encode(event)
 	case Text:
-		if event.Type == asr.EventTranscriptUpdate || event.Type == asr.EventTranscriptDelta || event.Type == asr.EventTranscriptDone {
-			text := event.Text
-			if (event.Type == asr.EventTranscriptUpdate || event.Type == asr.EventTranscriptDelta) && event.Snapshot != "" {
-				text = event.Snapshot
-			}
-			_, err := fmt.Fprint(w, text)
+		// partial/done both carry the cumulative full text.
+		if event.Type == asr.EventTranscriptPartial || event.Type == asr.EventTranscriptDone {
+			_, err := fmt.Fprint(w, event.Text)
 			return err
 		}
 		return nil

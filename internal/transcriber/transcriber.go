@@ -75,11 +75,12 @@ type streamClient interface {
 
 func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client streamClient, chunks []*audio.Source, opts asr.Options) {
 	defer close(out)
-	var b strings.Builder
 	var offset float64
+	var committed string // full text of all completed chunks, concatenated
 	for _, chunk := range chunks {
 		// Long-file streaming uses serial chunks to stay within upstream session
-		// limits while keeping timestamps monotonic for downstream consumers.
+		// limits. Each chunk's transcript is chunk-local full text; prefix it with
+		// the prior chunks' committed text so the whole-file stream stays cumulative.
 		enc, audioFormat, err := r.encoder()
 		if err != nil {
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "encoder_error", Message: err.Error()}}
@@ -90,26 +91,29 @@ func (r Runner) streamChunks(ctx context.Context, out chan<- asr.Event, client s
 			out <- asr.Event{Type: asr.EventError, Error: &asr.ErrorPayload{Code: "asr_error", Message: err.Error()}}
 			return
 		}
-		var chunkText string
+		// Suppress the per-chunk done; a single done with the whole-file text is
+		// emitted at the end.
+		var tail string
 		for ev := range events {
 			if ev.Type == asr.EventError {
 				out <- ev
 				return
 			}
 			if ev.Type == asr.EventTranscriptDone {
-				chunkText = ev.Text
+				tail = ev.Text
 				continue
 			}
-			if ev.Type == asr.EventSegmentStable {
-				continue
-			}
+			ev.Text = committed + ev.Text
+			ev.Start = 0
+			ev.End += offset
+			ev.AudioStartMS = 0
+			ev.AudioEndMS += int64(offset * 1000)
 			out <- ev
 		}
-		b.WriteString(chunkText)
+		committed += tail
 		offset += chunk.Duration().Seconds()
 	}
-	text := b.String()
-	out <- asr.Event{Type: asr.EventTranscriptDone, Text: text, Duration: offset}
+	out <- asr.Event{Type: asr.EventTranscriptDone, Text: committed, Duration: offset}
 }
 
 func (r Runner) transcribeChunks(ctx context.Context, client streamClient, chunks []*audio.Source, opts asr.Options) (asr.Result, error) {
@@ -283,15 +287,17 @@ func normalizeChunkResult(res asr.Result, language string, offset, duration floa
 
 func collect(events <-chan asr.Event) (asr.Result, error) {
 	var result asr.Result
-	nextSegmentIndex := 0
+	var full string
+	var end float64
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			return result, fmt.Errorf("%s", ev.Error.Message)
 		}
-		if ev.Type == asr.EventSegmentStable {
-			if ev.Text != "" {
-				result.Segments = append(result.Segments, asr.Segment{Index: nextSegmentIndex, Text: ev.Text, Start: ev.Start, End: ev.End})
-				nextSegmentIndex++
+		switch ev.Type {
+		case asr.EventTranscriptPartial:
+			full = ev.Text // cumulative full text; latest wins
+			if ev.End > end {
+				end = ev.End
 			}
 			if len(ev.Results) > 0 {
 				result.Results = ev.Results
@@ -299,9 +305,10 @@ func collect(events <-chan asr.Event) (asr.Result, error) {
 			if hasExtra(ev.Extra) {
 				result.Extra = ev.Extra
 			}
-		}
-		if ev.Type == asr.EventTranscriptDone {
-			result.Text = ev.Text
+		case asr.EventTranscriptDone:
+			if ev.Text != "" {
+				full = ev.Text
+			}
 			result.Duration = ev.Duration
 			result.Language = "zh"
 			if len(ev.Results) > 0 {
@@ -312,9 +319,17 @@ func collect(events <-chan asr.Event) (asr.Result, error) {
 			}
 		}
 	}
+	result.Text = full
 	if strings.TrimSpace(result.Text) == "" {
 		return result, ErrEmptyTranscript
 	}
+	// The cumulative stream has no segment boundaries; expose the whole
+	// transcript as a single segment so subtitle formats have a cue to render.
+	segEnd := result.Duration
+	if segEnd <= 0 {
+		segEnd = end
+	}
+	result.Segments = []asr.Segment{{Index: 0, Text: result.Text, Start: 0, End: segEnd}}
 	return result, nil
 }
 

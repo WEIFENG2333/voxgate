@@ -286,92 +286,52 @@ type textStreamDisplay struct {
 	Width       int
 }
 
+// writeTextStreamEvents renders the cumulative stream as readable text: on an
+// interactive terminal the growing full text is shown live and rewritten in
+// place, then committed as a final line on done; when piped, only the final
+// full text is written.
 func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStreamDisplay) int {
 	lineOpen := false
-	committedSnapshot := ""
-	currentLine := ""
-	currentSnapshot := ""
+	// commitLine clears any live line and prints text as a finished line.
+	commitLine := func(text string) int {
+		if display.Interactive && lineOpen {
+			if err := clearLine(w); err != nil {
+				printErr("format_error", err)
+				return 1
+			}
+			lineOpen = false
+		}
+		if text != "" {
+			if _, err := fmt.Fprintln(w, text); err != nil {
+				printErr("format_error", err)
+				return 1
+			}
+		}
+		return 0
+	}
 	for ev := range events {
 		if ev.Type == asr.EventError && ev.Error != nil {
 			if display.Interactive && lineOpen {
-				if _, err := fmt.Fprint(w, "\r\033[2K"); err != nil {
-					printErr("format_error", err)
-					return 1
-				}
+				_ = clearLine(w)
 			}
 			printErr(ev.Error.Code, fmt.Errorf("%s", ev.Error.Message))
 			return 1
 		}
 		switch ev.Type {
-		case asr.EventTranscriptUpdate, asr.EventTranscriptDelta:
+		case asr.EventTranscriptPartial:
 			if !display.Interactive {
 				continue
 			}
-			preview, snapshot := display.eventPreview(committedSnapshot, ev)
-			if err := display.writePreview(w, preview); err != nil {
+			if err := display.writePreview(w, ev.Text); err != nil {
 				printErr("format_error", err)
 				return 1
 			}
-			currentLine = preview
-			currentSnapshot = snapshot
 			lineOpen = true
-		case asr.EventSegmentStable:
-			if !display.Interactive {
-				continue
-			}
-			if lineOpen {
-				if err := clearLine(w); err != nil {
-					printErr("format_error", err)
-					return 1
-				}
-				lineOpen = false
-			}
-			if currentLine != "" {
-				if _, err := fmt.Fprintln(w, currentLine); err != nil {
-					printErr("format_error", err)
-					return 1
-				}
-			}
-			if currentSnapshot != "" {
-				committedSnapshot = currentSnapshot
-			}
-			currentLine = ""
-			currentSnapshot = committedSnapshot
 		case asr.EventTranscriptDone:
-			if display.Interactive {
-				if lineOpen {
-					if err := clearLine(w); err != nil {
-						printErr("format_error", err)
-						return 1
-					}
-					lineOpen = false
-				}
-				if ev.Text == "" {
-					continue
-				}
-				if committedSnapshot != "" || currentLine != "" {
-					if _, err := fmt.Fprintln(w); err != nil {
-						printErr("format_error", err)
-						return 1
-					}
-				}
-				if _, err := fmt.Fprintf(w, "Final:\n%s\n", ev.Text); err != nil {
-					printErr("format_error", err)
-					return 1
-				}
-				currentLine = ""
-				currentSnapshot = committedSnapshot
-				continue
+			// The cumulative full text becomes the final committed line.
+			if rc := commitLine(ev.Text); rc != 0 {
+				return rc
 			}
-			if ev.Text == "" {
-				continue
-			}
-			if _, err := fmt.Fprintln(w, ev.Text); err != nil {
-				printErr("format_error", err)
-				return 1
-			}
-			currentLine = ""
-			currentSnapshot = committedSnapshot
 		}
 	}
 	if display.Interactive && lineOpen {
@@ -381,13 +341,6 @@ func writeTextStreamEvents(w io.Writer, events <-chan asr.Event, display textStr
 		}
 	}
 	return 0
-}
-
-func (d textStreamDisplay) eventPreview(committedSnapshot string, ev asr.Event) (string, string) {
-	if ev.Snapshot == "" {
-		return ev.Text, ev.Text
-	}
-	return d.pendingText(committedSnapshot, ev.Snapshot), ev.Snapshot
 }
 
 func (d textStreamDisplay) writePreview(w io.Writer, text string) error {
@@ -401,43 +354,6 @@ func (d textStreamDisplay) writePreview(w io.Writer, text string) error {
 func clearLine(w io.Writer) error {
 	_, err := fmt.Fprint(w, "\r\033[2K")
 	return err
-}
-
-func (d textStreamDisplay) pendingText(committedSnapshot, snapshot string) string {
-	if committedSnapshot == "" {
-		return snapshot
-	}
-	if strings.HasPrefix(snapshot, committedSnapshot) {
-		return strings.TrimPrefix(snapshot, committedSnapshot)
-	}
-	committedRunes := runeLen(committedSnapshot)
-	runes := []rune(snapshot)
-	if committedRunes >= len(runes) {
-		return snapshot
-	}
-	if commonPrefixRunes(committedSnapshot, snapshot) < committedRunes-1 {
-		return snapshot
-	}
-	return string(runes[committedRunes:])
-}
-
-func commonPrefixRunes(a, b string) int {
-	ar := []rune(a)
-	br := []rune(b)
-	n := len(ar)
-	if len(br) < n {
-		n = len(br)
-	}
-	for i := 0; i < n; i++ {
-		if ar[i] != br[i] {
-			return i
-		}
-	}
-	return n
-}
-
-func runeLen(s string) int {
-	return len([]rune(s))
 }
 
 func (d textStreamDisplay) preview(text string) string {

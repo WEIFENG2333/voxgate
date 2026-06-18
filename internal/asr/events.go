@@ -5,30 +5,26 @@ import "time"
 type EventType string
 
 const (
-	EventTaskStarted      EventType = "task.started"
-	EventSessionStarted   EventType = "session.started"
-	EventVADStart         EventType = "speech.started"
-	EventTranscriptUpdate EventType = "transcript.text.update"
-	EventTranscriptDelta  EventType = "transcript.text.delta"
-	EventSegmentStable    EventType = "transcript.segment.stable"
-	EventTranscriptDone   EventType = "transcript.text.done"
-	EventError            EventType = "error"
+	EventTaskStarted       EventType = "task.started"
+	EventSessionStarted    EventType = "session.started"
+	EventVADStart          EventType = "speech.started"
+	EventTranscriptPartial EventType = "transcript.partial"
+	EventTranscriptDone    EventType = "transcript.done"
+	EventError             EventType = "error"
 )
 
-// Event is the internal streaming envelope used by the CLI, SSE endpoint, and
-// Realtime compatibility layer. Delta and update events describe the full
-// editable transcript snapshot. Segment stable exposes the upstream's stable
-// recognition phase; Text and Snapshot both carry the stable full transcript
-// view. Transcript done is the only immutable full transcript event.
+// Event is the internal streaming envelope. The transcript model is cumulative
+// full text: each recognition frame becomes one transcript.partial whose Text is
+// the whole transcript so far (it grows and may be revised in place as the
+// backend refines wording and punctuation). transcript.done signals end of
+// stream and carries the final full text. There are no segments and no boundary
+// guessing: a consumer renders the latest partial and settles on done. End/Duration
+// are audio-position metadata; Start is always 0 because the text starts at the
+// beginning of the stream.
 type Event struct {
 	Type         EventType      `json:"type"`
 	RequestID    string         `json:"request_id,omitempty"`
 	Text         string         `json:"text,omitempty"`
-	Delta        string         `json:"delta,omitempty"`
-	Snapshot     string         `json:"snapshot,omitempty"`
-	UtteranceID  string         `json:"utterance_id,omitempty"`
-	Revision     int            `json:"revision,omitempty"`
-	IsInterim    bool           `json:"is_interim,omitempty"`
 	Start        float64        `json:"start,omitempty"`
 	End          float64        `json:"end,omitempty"`
 	AudioStartMS int64          `json:"audio_start_ms,omitempty"`

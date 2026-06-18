@@ -368,108 +368,53 @@ func (c Client) recv(ctx context.Context, conn *websocket.Conn, trace *frameTrac
 			continue
 		}
 		switch parsed.Kind {
-		case ParsedInterim:
-			state.emitPartial(events, parsed)
-		case ParsedDefinite:
-			state.emitPartial(events, parsed)
-		case ParsedStable:
-			state.emitStable(events, parsed, source.Duration().Seconds())
+		case ParsedInterim, ParsedDefinite, ParsedStable:
+			state.emit(events, parsed)
 		}
 	}
 }
 
-// transcriptState accumulates the transcript across VAD segments. The backend
-// resets its snapshot to a per-segment view whenever a new segment begins
-// (signalled by a higher result index), so the full transcript is the
-// concatenation of finalized segments plus the current segment's snapshot.
+// transcriptState forwards the upstream's cumulative transcript. Every frame
+// carries the whole transcript so far (the backend grows it and revises wording
+// and punctuation in place), so this keeps only the latest snapshot, skips
+// unchanged repeats, and emits each change as transcript.partial. The last
+// snapshot becomes the final full text delivered by transcript.done.
 type transcriptState struct {
-	requestID  string
-	stableSeq  int
-	revision   int
-	committed  string // finalized segments (those with index < curIndex)
-	curIndex   int
-	curText    string // current segment's latest snapshot
-	started    bool
-	emitted    string // last full snapshot emitted, for delta computation
-	lastStable string // last full snapshot emitted as a stable segment
+	requestID string
+	tail      string // latest full-text snapshot
+	gotAny    bool
 }
 
 func newTranscriptState(requestID string) *transcriptState {
 	return &transcriptState{requestID: requestID}
 }
 
-func (s *transcriptState) hasTranscript() bool {
-	return s.committed != "" || s.curText != ""
-}
+func (s *transcriptState) hasTranscript() bool { return s.gotAny }
 
-func (s *transcriptState) text() string {
-	return s.committed + s.curText
-}
+// text returns the latest full-text snapshot for the terminal done event.
+func (s *transcriptState) text() string { return s.tail }
 
-func (s *transcriptState) emitPartial(events chan<- Event, parsed ParsedResult) {
-	s.ingest(events, parsed, 0)
-}
-
-func (s *transcriptState) emitStable(events chan<- Event, parsed ParsedResult, duration float64) {
-	full := s.ingest(events, parsed, duration)
-	if full == "" || full == s.lastStable {
+func (s *transcriptState) emit(events chan<- Event, parsed ParsedResult) {
+	text := displayText(parsed)
+	if text == "" || text == s.tail {
 		return
 	}
-	s.lastStable = full
-	events <- s.stableEvent(parsed, full, duration)
+	s.tail = text
+	s.gotAny = true
+	events <- s.event(EventTranscriptPartial, parsed)
 }
 
-// ingest folds one parsed result into the running transcript, emits a delta or
-// update event for any change, and returns the full transcript snapshot. A
-// result whose index advances commits the previous segment so nothing spoken
-// before a pause is lost.
-func (s *transcriptState) ingest(events chan<- Event, parsed ParsedResult, duration float64) string {
-	seg := displayText(parsed)
-	if seg == "" {
-		return s.text()
+func (s *transcriptState) event(kind EventType, parsed ParsedResult) Event {
+	return Event{
+		Type:       kind,
+		RequestID:  s.requestID,
+		Text:       s.tail,
+		End:        parsed.End,
+		AudioEndMS: secondsToMillis(parsed.End),
+		Results:    parsed.Results,
+		Extra:      &parsed.Extra,
+		Raw:        parsed.Raw,
 	}
-	if !s.started {
-		s.started = true
-		s.curIndex = parsed.Index
-	}
-	if s.isFullSnapshot(parsed, seg) {
-		s.committed = ""
-		s.curIndex = parsed.Index
-		s.curText = seg
-		return s.emitText(events, parsed, seg, duration)
-	}
-	if parsed.Index > s.curIndex {
-		s.committed += s.curText
-		s.curIndex = parsed.Index
-		s.curText = ""
-	}
-	s.curText = seg
-	return s.emitText(events, parsed, s.committed+s.curText, duration)
-}
-
-func (s *transcriptState) isFullSnapshot(parsed ParsedResult, text string) bool {
-	if parsed.Snapshot != "" && parsed.Snapshot != parsed.Text {
-		return true
-	}
-	if parsed.Index < s.curIndex {
-		return true
-	}
-	return s.committed != "" && strings.HasPrefix(text, s.committed)
-}
-
-func (s *transcriptState) emitText(events chan<- Event, parsed ParsedResult, full string, duration float64) string {
-	if full == s.emitted {
-		return full
-	}
-	s.revision++
-	delta, appendOnly := textDelta(s.emitted, full)
-	s.emitted = full
-	if appendOnly {
-		events <- s.event(EventTranscriptDelta, parsed, delta, full, duration)
-	} else {
-		events <- s.event(EventTranscriptUpdate, parsed, full, full, duration)
-	}
-	return full
 }
 
 func displayText(parsed ParsedResult) string {
@@ -477,59 +422,6 @@ func displayText(parsed ParsedResult) string {
 		return parsed.Snapshot
 	}
 	return parsed.Text
-}
-
-func (s *transcriptState) event(kind EventType, parsed ParsedResult, text, snapshot string, duration float64) Event {
-	ev := Event{
-		Type:         kind,
-		RequestID:    s.requestID,
-		Text:         text,
-		Snapshot:     snapshot,
-		Revision:     s.revision,
-		IsInterim:    kind != EventTranscriptDone && parsed.Kind != ParsedStable,
-		Start:        parsed.Start,
-		End:          parsed.End,
-		AudioStartMS: secondsToMillis(parsed.Start),
-		AudioEndMS:   secondsToMillis(parsed.End),
-		Duration:     duration,
-		Results:      parsed.Results,
-		Extra:        &parsed.Extra,
-		Raw:          parsed.Raw,
-	}
-	if kind == EventTranscriptDelta {
-		ev.Delta = text
-	}
-	return ev
-}
-
-func (s *transcriptState) stableEvent(parsed ParsedResult, snapshot string, duration float64) Event {
-	s.stableSeq++
-	return Event{
-		Type:         EventSegmentStable,
-		RequestID:    s.requestID,
-		Text:         snapshot,
-		Snapshot:     snapshot,
-		UtteranceID:  fmt.Sprintf("seg_%06d", s.stableSeq-1),
-		Revision:     s.revision,
-		Start:        parsed.Start,
-		End:          parsed.End,
-		AudioStartMS: secondsToMillis(parsed.Start),
-		AudioEndMS:   secondsToMillis(parsed.End),
-		Duration:     duration,
-		Results:      parsed.Results,
-		Extra:        &parsed.Extra,
-		Raw:          parsed.Raw,
-	}
-}
-
-func textDelta(previous, next string) (string, bool) {
-	if previous == "" {
-		return next, true
-	}
-	if strings.HasPrefix(next, previous) {
-		return strings.TrimPrefix(next, previous), true
-	}
-	return "", false
 }
 
 func secondsToMillis(seconds float64) int64 {

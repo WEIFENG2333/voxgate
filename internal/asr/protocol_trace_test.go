@@ -35,7 +35,7 @@ func TestProtocolTraceDropsHeartbeatFrames(t *testing.T) {
 	}
 }
 
-func TestProtocolTraceKeepsVADStartAndResults(t *testing.T) {
+func TestProtocolTraceKeepsVADStartAndResultsVerbatim(t *testing.T) {
 	lines := writeProtocolLines(t,
 		`{"time":"t1","direction":"recv","response":{"result_json":"{\"extra\":{\"vad_start\":true},\"results\":[{\"is_interim\":true,\"text\":\"\"}]}"}}`,
 		`{"time":"t2","direction":"recv","response":{"result_json":"{\"results\":[{\"text\":\"你好\",\"words\":[{\"word\":\"你\"}]}]}"}}`,
@@ -43,9 +43,9 @@ func TestProtocolTraceKeepsVADStartAndResults(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 kept lines, got %#v", lines)
 	}
-	// words are stripped from the readable view.
-	if strings.Contains(lines[1], "words") || strings.Contains(lines[1], "你") == false {
-		t.Fatalf("result line not rendered as expected: %s", lines[1])
+	// result_json is passed through verbatim — words are NOT stripped.
+	if !strings.Contains(lines[1], "words") || !strings.Contains(lines[1], "你") {
+		t.Fatalf("result line not rendered verbatim: %s", lines[1])
 	}
 	var second map[string]any
 	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {

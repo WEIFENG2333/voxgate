@@ -275,7 +275,7 @@ Common `transcribe` options:
 
 | Option | Description |
 |---|---|
-| `--format text|json|verbose_json|srt|vtt|ndjson|protocol` | output format; `protocol` is stream-only and prints readable upstream protocol events (audio frames, per-character `words`, and keepalive/heartbeat frames are dropped) |
+| `--format text|json|verbose_json|srt|vtt|ndjson|protocol` | output format; `protocol` is stream-only and prints upstream protocol events verbatim, dropping only the audio frames we send and the upstream's keepalive/heartbeat frames |
 | `--output <file>` / `-o <file>` | write output to file |
 | `--stream` | stream incremental output |
 | `--hotwords <words>` | comma-separated personal words to report before transcription |

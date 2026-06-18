@@ -90,9 +90,10 @@ func protocolTraceEvent(ev map[string]any) (map[string]any, bool) {
 		}
 		var result any
 		if resultJSON, _ := resp["result_json"].(string); strings.TrimSpace(resultJSON) != "" {
-			result = parseProtocolResult(resultJSON)
-			// The upstream emits frequent content-free keepalive frames; they add
-			// only noise (and leak client_ip) to a readable protocol view.
+			// result_json is passed through verbatim (parsed for readability); only
+			// content-free keepalive frames are dropped, since they add nothing but
+			// noise (and leak client_ip) to a readable protocol view.
+			result = parseJSONObject(resultJSON)
 			if isProtocolHeartbeat(result) {
 				return nil, false
 			}
@@ -136,37 +137,6 @@ func parseJSONObject(s string) any {
 		return s
 	}
 	return v
-}
-
-func parseProtocolResult(s string) any {
-	parsed := parseJSONObject(s)
-	value, ok := parsed.(map[string]any)
-	if !ok {
-		return parsed
-	}
-	return stripProtocolWords(value)
-}
-
-func stripProtocolWords(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, v := range x {
-			if k == "words" {
-				continue
-			}
-			out[k] = stripProtocolWords(v)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, v := range x {
-			out[i] = stripProtocolWords(v)
-		}
-		return out
-	default:
-		return v
-	}
 }
 
 func copyString(dst, src map[string]any, key string) {

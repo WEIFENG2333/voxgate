@@ -88,18 +88,46 @@ func protocolTraceEvent(ev map[string]any) (map[string]any, bool) {
 			out["decode_error"] = decodeErr
 			return out, true
 		}
+		var result any
+		if resultJSON, _ := resp["result_json"].(string); strings.TrimSpace(resultJSON) != "" {
+			result = parseProtocolResult(resultJSON)
+			// The upstream emits frequent content-free keepalive frames; they add
+			// only noise (and leak client_ip) to a readable protocol view.
+			if isProtocolHeartbeat(result) {
+				return nil, false
+			}
+		}
 		copyString(out, resp, "message_type")
 		copyString(out, resp, "request_id")
 		copyString(out, resp, "task_id")
 		copyNumber(out, resp, "status_code")
 		copyString(out, resp, "status_message")
-		if resultJSON, _ := resp["result_json"].(string); strings.TrimSpace(resultJSON) != "" {
-			out["result_json"] = parseProtocolResult(resultJSON)
+		if result != nil {
+			out["result_json"] = result
 		}
 		return out, true
 	default:
 		return nil, false
 	}
+}
+
+// isProtocolHeartbeat reports whether a recv result frame carries no recognition
+// content — the upstream's periodic keepalive frames (results null/empty, tagged
+// with extra.heartbeat_num). VAD-start frames (extra.vad_start) are kept.
+func isProtocolHeartbeat(parsed any) bool {
+	m, ok := parsed.(map[string]any)
+	if !ok {
+		return false
+	}
+	if results, ok := m["results"].([]any); ok && len(results) > 0 {
+		return false
+	}
+	if extra, ok := m["extra"].(map[string]any); ok {
+		if vadStart, _ := extra["vad_start"].(bool); vadStart {
+			return false
+		}
+	}
+	return true
 }
 
 func parseJSONObject(s string) any {
